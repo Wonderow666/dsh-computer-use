@@ -41,6 +41,8 @@ dsh plugin --profile desktop add link:F:\path\to\dsh-computer-use
 # 重启 DSH —— 插件在进程启动时挂载
 ```
 
+重启之后**还要开一个新会话**：工具清单在会话创建时装配，正在进行中的对话不会热更新，所以“重启了但老会话里依旧没有 `computer`”是正常现象，不是插件没装上（判断依据：`DSH_COMPUTER_USE_DEBUG=1` 会让插件在挂载时把 `apply` + `registered tool 'computer'` 打到 stderr）。
+
 `dsh` 就是 DSH 自带的启动器，例如
 `& "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd" plugin --profile desktop add ...`。
 
