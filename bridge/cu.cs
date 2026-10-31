@@ -249,16 +249,24 @@ static class Program
         }
     }
 
+    // stdout must be UTF-8 bytes no matter what: this is a WINEXE, so when the
+    // caller redirects stdout (a pipe from the DSH plugin, or `> file` in a
+    // shell) there is no console to carry an OutputEncoding and .NET falls back
+    // to the ANSI code page (CP936 here), which turned every Chinese window
+    // title into mojibake. Writing to the raw standard-output stream with an
+    // explicit UTF-8 encoder sidesteps the console stack entirely.
+    static readonly TextWriter Out = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false), 65536) { AutoFlush = true };
+
     static void Err(string msg)
     {
-        Console.Out.Write("{\"ok\":false,\"error\":" + J.S(msg) + "}\n");
-        Console.Out.Flush();
+        Out.Write("{\"ok\":false,\"error\":" + J.S(msg) + "}\n");
+        Out.Flush();
     }
 
     static void Emit(string json)
     {
-        Console.Out.Write(json + "\n");
-        Console.Out.Flush();
+        Out.Write(json + "\n");
+        Out.Flush();
     }
 
     static void Help()
@@ -285,7 +293,7 @@ static class Program
 "  clip --get | --text TEXT | --textfile FILE\n" +
 "  invoke --hwnd H --path 0.1.2   UIA invoke/toggle/setvalue/click fallback\n" +
 "  wait --ms N\n";
-        Console.Out.Write(h);
+        Out.Write(h);
     }
 
     // ---------------- info / windows ----------------

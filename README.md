@@ -115,6 +115,8 @@ dsh plugin --profile desktop add link:F:\path\to\dsh-computer-use
 
 - **`spawn(windowsHide: true)` 会隐藏目标窗口**：Windows 把 `STARTUPINFO.wShowWindow`（`SW_HIDE`）替换进进程对某个窗口的**第一次** `ShowWindow` 调用。于是 `ShowWindow(target, SW_SHOW)` 实际变成隐藏目标窗口——UIA 子树随之消失，表现为“`focus` 之后 `find` 返回 `count:0`、`windows` 里该窗口 `visible=false`”。修法：桥编成 `/target:winexe`（本就没有控制台），插件 `spawn` 明确 `windowsHide: false`，`focus` 里改用 `SetWindowPos(..., SWP_SHOWWINDOW|SWP_NOACTIVATE)` 而不是 `ShowWindow`（`SWP_SHOWWINDOW` 不受 STARTUPINFO 替换影响）。用 message-only 窗口“吸收”掉第一次 `ShowWindow` 的做法无效——替换是按窗口而非按进程。
 - **winexe 没有控制台**：`Console.OutputEncoding = …` 这类调用会抛异常，必须 `try/catch`；但标准输出被父进程重定向时照常可用，所以插件仍能拿 JSON。
+- **winexe 的 stdout 默认不是 UTF-8**：没有控制台时 .NET 会退回 ANSI 代码页（本机是 CP936），于是重定向出来的 JSON 里所有中文窗口标题/控件名都成了乱码（`"让dsh操控…"` → `"��dsh�ٿ�…"`），按标题选窗口、按中文控件名匹配全部失效。修法：不要走 `Console.Out`，直接 `new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false))`，绕开控制台栈。
+- **在 PowerShell 里手动跑 `cu.exe` 可能抓到空输出**：GUI 子系统程序不会阻塞 `&`，管道常常拿不到 stdout。要么 `cmd /c "cu.exe windows > out.json"`，要么 `Start-Process -Wait -RedirectStandardOutput out.json`；插件走的是 `stdio: ["ignore","pipe","pipe"]`，不受影响。
 
 ## 构建与自测
 
