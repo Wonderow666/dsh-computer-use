@@ -1,0 +1,42 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # The bridge is plain C# 5 compiled by the in-box .NET Framework compiler,
+      # so there is no SDK to install and nothing to restore.
+      - name: Build bridge
+        shell: pwsh
+        run: ./build.ps1
+
+      - name: Assert the bridge binary exists
+        shell: pwsh
+        run: |
+          if (-not (Test-Path bin/cu.exe)) { throw "bin/cu.exe was not produced" }
+          "{0} bytes" -f (Get-Item bin/cu.exe).Length
+
+      # Contract tests mock the engine and node:child_process, so they need no
+      # interactive desktop and no GUI session.
+      - name: Plugin contract tests
+        shell: pwsh
+        run: node test/run-tests.mjs
+
+      - name: Upload build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: cu-exe
+          path: bin/cu.exe
+          if-no-files-found: error
