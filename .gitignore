@@ -1,0 +1,16 @@
+# build / test output
+artifacts/
+test/target/target.exe
+test/target/out.txt
+*.log
+
+# deps
+node_modules/
+pnpm-lock.yaml
+
+# editors / OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store

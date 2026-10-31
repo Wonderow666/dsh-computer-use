@@ -1,0 +1,32 @@
+# ============================================================================
+# dsh-computer-use - DSH bundle patch
+# ============================================================================
+# Mounts the `computer` tool (Windows GUI control) on a profile:
+#   dsh plugin --profile desktop add link:<absolute path of this folder>
+# then add "dsh-computer-use" to dsh.profile.bundles in the profile package.json.
+#
+# Config keys:
+#   enabled                    - master switch for the tool (default true)
+#   enginePath                 - path to cu.exe (default <plugin>/bin/cu.exe)
+#   artifactsDir               - where screenshots / temp text are written
+#   blockedProcesses           - refuse input while one of these owns the
+#                                foreground (matches process, class or title,
+#                                case-insensitive). Empty by default.
+#   refuseFullscreenForeground - refuse input when the foreground window covers
+#                                a whole monitor (default false)
+#   allowProcessControl        - allow launch/kill actions (default true)
+#   timeoutMs                  - per-engine-call ceiling (default 30000)
+# ============================================================================
+
+- insert:
+    - id: dsh-computer-use
+      name: dsh-computer-use
+      config:
+        enabled: true
+        # Never inject input into the games this machine runs (PUBG's window is
+        # class UnrealWindow, process TslGame.exe). Matched against the window
+        # that would receive the input, case-insensitive.
+        blockedProcesses: ["TslGame.exe", "UnrealWindow"]
+        refuseFullscreenForeground: false
+        allowProcessControl: true
+        timeoutMs: 30000

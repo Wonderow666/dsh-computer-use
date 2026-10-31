@@ -1,0 +1,60 @@
+{
+  "name": "dsh-computer-use",
+  "version": "0.1.0",
+  "description": "Native Windows GUI control for DeepSeek Harness: screen capture, UI Automation tree, mouse and keyboard injection, app launch and kill, all behind one `computer` tool.",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "computer-use",
+    "gui-automation",
+    "uiautomation",
+    "win32",
+    "sendinput",
+    "desktop-automation"
+  ],
+  "type": "module",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "bin",
+    "bridge",
+    "build.ps1",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "powershell -ExecutionPolicy Bypass -File ./build.ps1",
+    "build:fixtures": "powershell -ExecutionPolicy Bypass -File ./build.ps1 -Test",
+    "test": "node test/run-tests.mjs",
+    "test:e2e": "node test/e2e.mjs",
+    "test:console": "node test/console.mjs",
+    "test:input": "node test/input.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "os": [
+    "win32"
+  ],
+  "author": "Wonderow666",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Wonderow666/dsh-computer-use.git"
+  },
+  "homepage": "https://github.com/Wonderow666/dsh-computer-use#readme",
+  "bugs": {
+    "url": "https://github.com/Wonderow666/dsh-computer-use/issues"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
