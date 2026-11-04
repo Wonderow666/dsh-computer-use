@@ -50,20 +50,26 @@ dsh plugin --profile desktop add link:F:\path\to\dsh-computer-use
 
 重启后模型侧多出一个 `computer` 工具。插件配置在 `cordis.patch.yml`（`blockedProcesses`、`refuseFullscreenForeground`、`allowProcessControl`、`timeoutMs`、`enginePath`、`artifactsDir`），profile 自己的 `cordis.patch.yml` 可以按 id 覆盖这些字段。
 
-## 工具面（单一 `computer`，19 个 action）
+## 工具面（单一 `computer`，23 个 action）
 
 | 类别 | action | 返回 |
 | --- | --- | --- |
-| 观察 | `info` | 屏幕/虚拟桌面尺寸、每台显示器 dpi 与缩放、光标、前台窗口 |
+| 预检 | `inputcheck` | 移动光标再复位，回报 `landed`/`integrity`/`locked`/`pointerDrifting` 与一句结论。**动手前先跑它** |
+| 观察 | `info` | 屏幕/虚拟桌面尺寸、每台显示器 dpi 与缩放、光标、前台窗口、`locked`、输入桌面名 |
 | | `windows` / `procs` | 顶层窗口（hwnd/title/class/process/pid/rect/foreground）或进程列表 |
 | | `screenshot` | PNG 路径 + `srcW/srcH/w/h/scale`，默认缩到 1600 宽；支持 `region` 裁剪 |
 | | `snapshot` | UI Automation 控制树，元素 id 形如 `0.2.1`，带类型与矩形 |
 | | `find` / `hit` | 按名称找控件 / 查某坐标下是什么窗口与控件 |
-| 输入 | `click` `move` `scroll` `drag` | SendInput 注入，物理像素坐标，可选 `hwnd`/`title` 定位窗口 |
+| | `geom` | 窗口矩形 + **客户区原点** + dpi，几何断言的唯一来源 |
+| | `modals` | 枚举 `#32770` 对话框、带 owner 的弹窗、被禁用的顶层窗口（“输入被吞”的第一嫌疑人） |
+| | `hover` | 移到目标控件驻留后读 UIA 的 name/helpText/acceleratorKey 与 `tooltips_class32` 文本 |
+| 输入 | `click` `move` `scroll` `drag` | SendInput 注入，物理像素坐标；支持 `hwnd`/`title` 定位与 **`relx`/`rely`（客户区相对坐标）** |
 | | `type` `key` | Unicode 键入（中文安全）；`key` 走组合键 `"ctrl+shift+s"`，逗号分隔连续按键 |
 | | `invoke` | 通过 UIA 的 Invoke/Toggle/Select/SetValue 模式驱动控件，不依赖焦点与像素 |
 | 生命周期 | `launch` `kill` `focus` `wait` | 启动进程（可带参数/工作目录）、结束进程、置前、等待 |
 | 杂项 | `clipboard` | 读写剪贴板 |
+
+`click`/`move`/`drag` 会**验证注入是否真的落地**：注入后读回光标，偏差超过 2px 就报错并附诊断，而不是假装成功。窗口移动/缩放后坐标失效的问题，用 `relx`/`rely` 解决——它们是相对目标窗口客户区的偏移，引擎每次实时解析成屏幕坐标。
 
 一次典型调用看起来是这样（模型侧）：
 
@@ -119,6 +125,28 @@ dsh plugin --profile desktop add link:F:\path\to\dsh-computer-use
 - **winexe 没有控制台**：`Console.OutputEncoding = …` 这类调用会抛异常，必须 `try/catch`；但标准输出被父进程重定向时照常可用，所以插件仍能拿 JSON。
 - **winexe 的 stdout 默认不是 UTF-8**：没有控制台时 .NET 会退回 ANSI 代码页（本机是 CP936），于是重定向出来的 JSON 里所有中文窗口标题/控件名都成了乱码（`"让dsh操控…"` → `"��dsh�ٿ�…"`），按标题选窗口、按中文控件名匹配全部失效。修法：不要走 `Console.Out`，直接 `new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false))`，绕开控制台栈。
 - **在 PowerShell 里手动跑 `cu.exe` 可能抓到空输出**：GUI 子系统程序不会阻塞 `&`，管道常常拿不到 stdout。要么 `cmd /c "cu.exe windows > out.json"`，要么 `Start-Process -Wait -RedirectStandardOutput out.json`；插件走的是 `stdio: ["ignore","pipe","pipe"]`，不受影响。
+
+### 为什么“点了没反应”：三个静默失败源
+
+Windows 有三套机制会让注入的输入**无声无息地消失**——`SendInput` 照样返回成功，光标纹丝不动，屏幕毫无变化。这是自动化里最贵的坑：你会开始怀疑应用本身坏了。
+
+| 静默失败源 | 现象 | 判断 | 处理 |
+| --- | --- | --- | --- |
+| **进程完整性过低** | `SetCursorPos` 返回 False；`SendInput` 返回 1 但指针不动 | `inputcheck` → `integrity: "LOW"` | 引擎必须从**非低完整性**路径运行（见下） |
+| **工作站已锁屏** | 同上，且前台窗口是锁屏界面 | `inputcheck` → `locked: true` | 解锁屏幕，没有别的办法 |
+| **目标进程已提权（UIPI）** | 目标窗口收不到输入 | `inputcheck` → 前台进程提权而引擎没有 | 提权运行目标，或别用提权程序 |
+
+**低完整性这一条尤其隐蔽**：DSH 给会话工作目录打上 `Low Mandatory Level` 标签（它沙箱的一部分），而 Windows 会**用镜像文件的完整性标签启动进程**。于是从 `F:\Dharness\...\bin\cu.exe` 启动的引擎是 LOW 进程——它能看屏幕、能读控件树，但 `SetCursorPos`/`SendInput` 一律被丢弃。
+
+所以插件默认不直接跑包里的 `bin/cu.exe`，而是先把它**复制到 `%LOCALAPPDATA%\dsh-computer-use\engine\<size-mtime>\cu.exe` 再执行**（正常完整性），必要时才回退到原路径。想验证：
+
+```powershell
+computer action=inputcheck          # -> landed:true, integrity:"MEDIUM"
+```
+
+## 操作协议
+
+`docs/PLAYBOOK.md` 把实操中踩过的坑固化成流程：五分钟预检、坐标只用一个空间、先用语义入口（hover/find/invoke）再动像素、绝不隐式改窗口状态、报告只写“做了什么、测到什么”。**新任务开始前先读它。**
 
 ## 构建与自测
 

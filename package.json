@@ -1,6 +1,6 @@
-{
+﻿{
   "name": "dsh-computer-use",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Native Windows GUI control for DeepSeek Harness: screen capture, UI Automation tree, mouse and keyboard injection, app launch and kill, all behind one `computer` tool.",
   "keywords": [
     "dsh",

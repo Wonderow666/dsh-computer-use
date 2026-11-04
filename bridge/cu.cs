@@ -132,6 +132,22 @@ static class Native
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowW(string cls, string title);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowExW(IntPtr parent, IntPtr after, string cls, string title);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int SendMessageW(IntPtr h, int msg, IntPtr w, string l);
+
+    // ---------- geometry ----------
+    [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h, out RECT r);
+    [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h, ref POINT p);
+    [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr h, uint cmd);
+    [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr parent, EnumProc cb, IntPtr lp);
+
+    // ---------- integrity / input health ----------
+    [DllImport("advapi32.dll", SetLastError = true)] public static extern bool OpenProcessToken(IntPtr proc, uint access, out IntPtr token);
+    [DllImport("advapi32.dll", SetLastError = true)] public static extern bool GetTokenInformation(IntPtr token, int cls, out uint buf, int len, out int ret);
+    [DllImport("advapi32.dll", SetLastError = true, EntryPoint = "GetTokenInformation")] public static extern bool GetTokenInformationBuf(IntPtr token, int cls, IntPtr buf, int len, out int ret);
+    [DllImport("advapi32.dll")] public static extern IntPtr GetSidSubAuthorityCount(IntPtr sid);
+    [DllImport("advapi32.dll")] public static extern IntPtr GetSidSubAuthority(IntPtr sid, uint index);
+    [DllImport("user32.dll")] public static extern IntPtr OpenInputDesktop(uint flags, bool inherit, uint access);
+    [DllImport("user32.dll")] public static extern bool CloseDesktop(IntPtr h);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern bool GetUserObjectInformationW(IntPtr h, int index, StringBuilder buf, int len, out int needed);
 }
 
 static class J
@@ -225,6 +241,10 @@ static class Program
                 case "tree": Tree(c); break;
                 case "find": Find(c); break;
                 case "hit": Hit(c); break;
+            case "inputcheck": InputCheck(); break;
+            case "hover": Hover(c); break;
+            case "geom": Geom(c); break;
+            case "modals": Modals(c); break;
                 case "move": Mouse(c, "move"); break;
                 case "click": Mouse(c, "click"); break;
                 case "scroll": Mouse(c, "scroll"); break;
@@ -280,8 +300,12 @@ static class Program
 "  tree [--hwnd H] [--depth N] [--max N]   UI Automation control-view tree with element ids\n" +
 "  find --name TEXT [--hwnd H]   search UIA elements by name/automationId\n" +
 "  hit --x X --y Y               what is under a screen point\n" +
-"  move --x X --y Y\n" +
-"  click [--x X] [--y Y] [--button left|right|middle] [--count N] [--double]\n" +
+"  inputcheck                    prove that synthetic input actually lands (do this first)\n" +
+"  hover --x X --y Y [--ms 1000] move, dwell, then read what the pointer rests on\n" +
+"  geom [--hwnd H]               window/client rectangles, client origin, dpi\n" +
+"  modals [--pid N]              dialog-like / disabled windows that swallow input\n" +
+"  move --x X --y Y [--relx N --rely N]\n" +
+"  click [--x X] [--y Y] [--relx N --rely N] [--hwnd H] [--button left|right|middle] [--count N] [--double]\n" +
 "  scroll [--x X] [--y Y] [--amount N] [--horizontal]\n" +
 "  drag --x1 X --y1 Y --x2 X --y2 Y [--ms 400]\n" +
 "  type --text TEXT | --textfile FILE   (unicode via KEYEVENTF_UNICODE)\n" +
@@ -352,6 +376,10 @@ static class Program
         o.Append(']');
         o.Append(",\"privileged\":").Append(J.B(Privileged()));
         o.Append(",\"uiRestrictions\":").Append(UiRestrictions());
+        string desk;
+        bool locked = SessionLocked(out desk);
+        o.Append(",\"locked\":").Append(J.B(locked));
+        if (desk != null) o.Append(",\"inputDesktopName\":").Append(J.S(desk));
         o.Append(",\"foreground\":").Append(WinJson(Native.GetForegroundWindow()));
         o.Append('}');
         Emit(o.ToString());
@@ -930,12 +958,23 @@ static class Program
     static void Mouse(Cmd c, string mode)
     {
         int mx = c.I("x", int.MinValue), my = c.I("y", int.MinValue);
+        if (c.Has("relx") || c.Has("rely"))
+        {
+            if (mx == int.MinValue) mx = 0;
+            if (my == int.MinValue) my = 0;
+            ResolveRelative(c, ref mx, ref my);
+        }
         if (mode == "click" || mode == "scroll") GuardPoint(c, mx, my);
         // Move the pointer absolutely first when coordinates are given.
         if (mx != int.MinValue && my != int.MinValue)
         {
             if (mode == "scroll") Native.SetCursorPos(mx, my);
-            else AbsMove(mx, my);
+            else
+            {
+                AbsMove(mx, my);
+                Thread.Sleep(30);
+                VerifyPointer(mx, my, c);
+            }
             Thread.Sleep(30);
         }
         if (mode == "click")
@@ -965,14 +1004,384 @@ static class Program
 
     static int this_scrollish(int notches) { return notches * 120; }
 
+    static IntPtr TargetWindow(Cmd c)
+    {
+        string hs = c.Get("hwnd", null);
+        if (hs == null) return IntPtr.Zero;
+        long v;
+        if (!long.TryParse(hs, NumberStyles.Integer, CultureInfo.InvariantCulture, out v)) return IntPtr.Zero;
+        return new IntPtr(v);
+    }
+
+    // Absolute screen coordinates break the moment a window moves or resizes -
+    // which happens all the time (maximize, splitter drag, monitor change). A
+    // caller that knows the window can ask for a client-area point instead and
+    // the engine resolves it against the live client origin.
+    static void ResolveRelative(Cmd c, ref int x, ref int y)
+    {
+        int rx = c.I("relx", int.MinValue), ry = c.I("rely", int.MinValue);
+        if (rx == int.MinValue && ry == int.MinValue) return;
+        IntPtr h = TargetWindow(c);
+        if (h == IntPtr.Zero) throw new Exception("--relx/--rely need --hwnd: they are client-area coordinates of that window");
+        Native.POINT org; org.X = 0; org.Y = 0;
+        if (!Native.ClientToScreen(h, ref org)) throw new Exception("ClientToScreen failed for hwnd " + h.ToInt64());
+        x = org.X + (rx == int.MinValue ? 0 : rx);
+        y = org.Y + (ry == int.MinValue ? 0 : ry);
+    }
+
+    // 1 = elevated, 0 = not, -1 = unknown (cannot open the token)
+    static int ElevatedOf(int pid)
+    {
+        if (pid <= 0) return -1;
+        IntPtr proc = Native.OpenProcess(0x1000 /* QUERY_LIMITED_INFORMATION */, false, pid);
+        if (proc == IntPtr.Zero) return -1;
+        IntPtr tok = IntPtr.Zero;
+        try
+        {
+            if (!Native.OpenProcessToken(proc, 0x0008 /* TOKEN_QUERY */, out tok)) return -1;
+            uint v; int size;
+            if (!Native.GetTokenInformation(tok, 20 /* TokenElevation */, out v, 4, out size)) return -1;
+            return v != 0 ? 1 : 0;
+        }
+        finally
+        {
+            if (tok != IntPtr.Zero) Native.CloseHandle(tok);
+            Native.CloseHandle(proc);
+        }
+    }
+
+    static int SelfElevated()
+    {
+        return ElevatedOf(Process.GetCurrentProcess().Id);
+    }
+
+    // Name of the desktop that currently receives physical input ("Default" when
+    // the session is unlocked, "Winlogon" while the workstation is locked).
+    static string InputDesktopName(out bool opened)
+    {
+        opened = false;
+        IntPtr d = Native.OpenInputDesktop(0, false, 0x0001 /* DESKTOP_READOBJECTS */);
+        if (d == IntPtr.Zero) return null;
+        try
+        {
+            opened = true;
+            StringBuilder sb = new StringBuilder(128); int need;
+            if (!Native.GetUserObjectInformationW(d, 2 /* UOI_NAME */, sb, 256, out need)) return null;
+            return sb.ToString();
+        }
+        finally { Native.CloseDesktop(d); }
+    }
+
+    // A locked workstation switches the input desktop to the secure one: every
+    // synthetic event is dropped and SetCursorPos returns FALSE. This is the
+    // single most confusing state to debug, so name it explicitly.
+    static bool SessionLocked(out string inputDesktop)
+    {
+        bool opened;
+        inputDesktop = InputDesktopName(out opened);
+        if (!opened) return true; // access denied: the secure desktop is up
+        return inputDesktop != null && !String.Equals(inputDesktop, "Default", StringComparison.OrdinalIgnoreCase);
+    }
+
+    static string LockHint()
+    {
+        string desk;
+        if (!SessionLocked(out desk)) return null;
+        return "; the workstation is locked (input desktop: " + (desk ?? "unknown") + ") - no synthetic input can reach it; unlock the screen and retry";
+    }
+
+    // The single most expensive failure mode seen in practice: input that is
+    // silently discarded (UIPI against an elevated window, a non-input desktop,
+    // a locked session). Say what to check instead of looking like a no-op.
+    static string InputDiagnosis(int pid)
+    {
+        string lockHint = LockHint();
+        if (lockHint != null) return lockHint;
+        StringBuilder s = new StringBuilder();
+        string il = IntegrityName() ?? "?null";
+        if (il == "LOW") s.Append("; this engine runs at LOW integrity (it was started from a low-integrity file such as one inside DSH's workspace), so Windows discards its input - run the engine from a normal-integrity location like %LOCALAPPDATA%");
+        bool inputDesktop = true;
+        IntPtr d = Native.OpenInputDesktop(0, false, 0x0100 /* DESKTOP_SWITCHDESKTOP */);
+        if (d != IntPtr.Zero) Native.CloseDesktop(d); else inputDesktop = false;
+        if (!inputDesktop) s.Append("; this process cannot open the current input desktop");
+        int self = SelfElevated();
+        if (pid > 0)
+        {
+            int tgt = ElevatedOf(pid);
+            if (tgt == 1 && self == 0) s.Append("; the target (pid " + pid + ") is elevated while this process is not, so UIPI discards the injected input - run the caller elevated, or run the application un-elevated");
+            if (tgt == -1) s.Append("; could not read the target's token (pid " + pid + ")");
+        }
+        if (s.Length == 0) s.Append("; run `inputcheck` to test the channel");
+        return s.ToString();
+    }
+
+    static void VerifyPointer(int x, int y, Cmd c)
+    {
+        int vx = Native.GetSystemMetrics(76), vy = Native.GetSystemMetrics(77);
+        int vw = Native.GetSystemMetrics(78), vh = Native.GetSystemMetrics(79);
+        if (x < vx || y < vy || x >= vx + vw || y >= vy + vh) return; // clamped by the OS
+        Native.POINT q; Native.GetCursorPos(out q);
+        if (Math.Abs(q.X - x) <= 2 && Math.Abs(q.Y - y) <= 2) return;
+        throw new Exception("the pointer did not move to " + x + "," + y + " (it is at " + q.X + "," + q.Y + ") - the injected event never reached the screen" + (PointerDrifting() ? "; the pointer was moving on its own during the check (someone is using the mouse), so retry with the mouse left alone" : "") + InputDiagnosis(PidOfRoot(TargetWindow(c))));    }
+
+    static void InputCheck()
+    {
+        Native.POINT p0; Native.GetCursorPos(out p0);
+        int vx = Native.GetSystemMetrics(76), vy = Native.GetSystemMetrics(77);
+        int vw = Math.Max(4, Native.GetSystemMetrics(78)), vh = Math.Max(4, Native.GetSystemMetrics(79));
+        int px = Math.Min(vx + vw - 2, Math.Max(vx + 1, p0.X + 40));
+        int py = Math.Min(vy + vh - 2, Math.Max(vy + 1, p0.Y + 25));
+        bool drifting = PointerDrifting();
+        bool sendOk = true;
+        string sendErr = null;
+        // A human moving the mouse at the same moment can beat us to the pixel,
+        // so try a few times before calling the channel dead.
+        bool landed = false;
+        for (int attempt = 0; attempt < 3 && !landed; attempt++)
+        {
+            Native.POINT a; Native.GetCursorPos(out a);
+            try { AbsMove(px, py); }
+            catch (Exception ex) { sendOk = false; sendErr = ex.Message; break; }
+            Thread.Sleep(70);
+            Native.POINT p1; Native.GetCursorPos(out p1);
+            landed = Math.Abs(p1.X - px) <= 2 && Math.Abs(p1.Y - py) <= 2;
+            if (!landed) { Thread.Sleep(40); }
+        }
+        Native.POINT back; Native.GetCursorPos(out back);
+        try { AbsMove(p0.X, p0.Y); } catch { }
+        bool inputDesktop = true;
+        IntPtr d = Native.OpenInputDesktop(0, false, 0x0100);
+        if (d != IntPtr.Zero) Native.CloseDesktop(d); else inputDesktop = false;
+        string desk;
+        bool locked = SessionLocked(out desk);
+        string il = IntegrityName() ?? "?null";
+        StringBuilder o = new StringBuilder();
+        o.Append("{\"ok\":true,\"landed\":").Append(J.B(landed));
+        o.Append(",\"sendInput\":").Append(J.B(sendOk));
+        if (sendErr != null) o.Append(",\"sendInputError\":").Append(J.S(sendErr));
+        o.Append(",\"from\":{\"x\":").Append(p0.X).Append(",\"y\":").Append(p0.Y).Append('}');
+        o.Append(",\"to\":{\"x\":").Append(px).Append(",\"y\":").Append(py).Append('}');
+        o.Append(",\"got\":{\"x\":").Append(back.X).Append(",\"y\":").Append(back.Y).Append('}');
+        o.Append(",\"pointerDrifting\":").Append(J.B(drifting));
+        o.Append(",\"inputDesktop\":").Append(J.B(inputDesktop));
+        o.Append(",\"locked\":").Append(J.B(locked));
+        if (desk != null) o.Append(",\"inputDesktopName\":").Append(J.S(desk));
+        if (il != null) o.Append(",\"integrity\":").Append(J.S(il));
+        o.Append(",\"selfElevated\":").Append(SelfElevated() == 1 ? "true" : "false");
+        o.Append(",\"foreground\":").Append(WinJson(Native.GetForegroundWindow()));
+        string verdict;
+        if (landed) verdict = "input channel healthy: synthetic pointer movement reached the screen";
+        else if (locked) verdict = "the workstation is locked, so no synthetic input can reach the screen; unlock it and run inputcheck again - nothing you do before that can succeed";
+        else if (il == "LOW") verdict = "this engine runs at LOW integrity (it was started from a low-integrity file, e.g. inside DSH's workspace), so Windows discards its synthetic input; run the engine from a normal-integrity location such as %LOCALAPPDATA%";
+        else if (drifting) verdict = "inconclusive: the pointer was moving on its own while the check ran (someone is using the mouse); leave the mouse alone and run inputcheck again";
+        else verdict = "synthetic input is NOT reaching the desktop; do not interpret anything the screen shows before input as a click - check elevation of the target, the input desktop, and whether a UAC prompt is up";
+        o.Append(",\"verdict\":").Append(J.S(verdict));
+        o.Append('}');
+        Emit(o.ToString());
+    }
+
+    // The pointer moves on its own if a human is at the machine; that is not the
+    // engine failing, and the caller deserves to know the difference.
+    static bool PointerDrifting()
+    {
+        Native.POINT a; Native.GetCursorPos(out a);
+        Thread.Sleep(30);
+        Native.POINT b; Native.GetCursorPos(out b);
+        return a.X != b.X || a.Y != b.Y;
+    }
+
+    static string IntegrityName()
+    {
+        IntPtr tok;
+        if (!Native.OpenProcessToken(Process.GetCurrentProcess().Handle, 0x0008 /* TOKEN_QUERY */, out tok)) return "?opentoken";
+        IntPtr buf = Marshal.AllocHGlobal(512);
+        try
+        {
+            int need;
+            if (!Native.GetTokenInformationBuf(tok, 25 /* TokenIntegrityLevel */, buf, 512, out need)) return "?til" + Marshal.GetLastWin32Error();
+            IntPtr sid = Marshal.ReadIntPtr(buf);
+            byte count = Marshal.ReadByte(Native.GetSidSubAuthorityCount(sid));
+            int rid = Marshal.ReadInt32(Native.GetSidSubAuthority(sid, (uint)(count - 1)));
+            if (rid == 0x1000) return "LOW";
+            if (rid == 0x2000) return "MEDIUM";
+            if (rid == 0x3000) return "HIGH";
+            if (rid == 0x4000) return "SYSTEM";
+            return "0x" + rid.ToString("x");
+        }
+        catch { return null; }
+        finally { Marshal.FreeHGlobal(buf); Native.CloseHandle(tok); }
+    }
+
+    static string ElementInfoAt(int x, int y)
+    {
+        try
+        {
+            AutomationElement e = AutomationElement.FromPoint(new System.Windows.Point(x, y));
+            if (e == null) return "null";
+            StringBuilder b = new StringBuilder();
+            b.Append("{\"role\":").Append(J.S(e.Current.ControlType.ProgrammaticName.Replace("ControlType.", "")));
+            b.Append(",\"name\":").Append(J.S(Safe(e.Current.Name)));
+            b.Append(",\"automationId\":").Append(J.S(Safe(e.Current.AutomationId)));
+            b.Append(",\"helpText\":").Append(J.S(Safe(e.Current.HelpText)));
+            b.Append(",\"acceleratorKey\":").Append(J.S(Safe(e.Current.AcceleratorKey)));
+            b.Append(",\"pid\":").Append(e.Current.ProcessId);
+            b.Append(",\"rect\":").Append(RectOf(e)).Append('}');
+            return b.ToString();
+        }
+        catch { return "null"; }
+    }
+
+    // Toolbars and icon strips are unreadable from pixels but they answer
+    // immediately to a hover: the tooltip carries the authoritative label and
+    // often the accelerator. Pointing is cheaper than guessing from diffs.
+    static string TooltipsOf(int pid)
+    {
+        StringBuilder b = new StringBuilder();
+        int n = 0;
+        Native.EnumWindows(delegate(IntPtr h, IntPtr lp)
+        {
+            if (!Native.IsWindowVisible(h)) return true;
+            string cls = ClassOf(h);
+            if (!cls.ToLowerInvariant().Contains("tooltip")) return true;
+            int ownerPid; Native.GetWindowThreadProcessId(h, out ownerPid);
+            if (pid > 0 && ownerPid != pid) return true;
+            List<string> texts = new List<string>();
+            string own = WindowTitle(h);
+            if (own.Length > 0) texts.Add(own);
+            Native.EnumChildWindows(h, delegate(IntPtr ch, IntPtr lp2)
+            {
+                string t = WindowTitle(ch);
+                if (t.Length > 0 && !texts.Contains(t)) texts.Add(t);
+                return true;
+            }, IntPtr.Zero);
+            if (texts.Count == 0) return true;
+            if (n++ > 0) b.Append(',');
+            b.Append("{\"hwnd\":").Append(h.ToInt64()).Append(",\"text\":");
+            StringBuilder joined = new StringBuilder();
+            for (int i = 0; i < texts.Count; i++)
+            {
+                if (i > 0) joined.Append(' ');
+                joined.Append(texts[i]);
+            }
+            b.Append(J.S(joined.ToString())).Append('}');
+            return true;
+        }, IntPtr.Zero);
+        return "[" + b.ToString() + "]";
+    }
+
+    static void Hover(Cmd c)
+    {
+        int x = c.I("x", int.MinValue), y = c.I("y", int.MinValue);
+        if (x == int.MinValue || y == int.MinValue) { Err("--x and --y are required"); return; }
+        int ms = Math.Max(150, c.I("ms", 1000));
+        AbsMove(x, y);
+        Thread.Sleep(ms);
+        int pid = UiaPidAt(x, y);
+        StringBuilder o = new StringBuilder();
+        o.Append("{\"ok\":true,\"x\":").Append(x).Append(",\"y\":").Append(y);
+        o.Append(",\"heldMs\":").Append(ms);
+        o.Append(",\"element\":").Append(ElementInfoAt(x, y));
+        o.Append(",\"tooltips\":").Append(TooltipsOf(pid));
+        o.Append('}');
+        Emit(o.ToString());
+    }
+
+    static string ClassOf(IntPtr h)
+    {
+        StringBuilder cl = new StringBuilder(256);
+        Native.GetClassNameW(h, cl, cl.Capacity);
+        return cl.ToString();
+    }
+
+    static void Modals(Cmd c)
+    {
+        int wantPid = c.I("pid", 0);
+        StringBuilder b = new StringBuilder();
+        int n = 0;
+        Native.EnumWindows(delegate(IntPtr h, IntPtr lp)
+        {
+            int pid; Native.GetWindowThreadProcessId(h, out pid);
+            if (wantPid != 0 && pid != wantPid) return true;
+            string title = WindowTitle(h);
+            bool visible = Native.IsWindowVisible(h);
+            if (!visible && title.Length == 0) return true;
+            bool enabled = Native.IsWindowEnabled(h);
+            string cls = ClassOf(h);
+            IntPtr owner = Native.GetWindow(h, 4 /* GW_OWNER */);
+            bool dialog = string.Equals(cls, "#32770", StringComparison.OrdinalIgnoreCase);
+            bool disabled = !enabled;
+            bool ownedPopup = owner != IntPtr.Zero && visible;
+            if (wantPid == 0) { if (!dialog && !disabled) return true; }
+            else { if (!dialog && !disabled && !ownedPopup) return true; }
+            if (n++ > 0) b.Append(',');
+            b.Append("{\"hwnd\":").Append(h.ToInt64());
+            b.Append(",\"title\":").Append(J.S(title));
+            b.Append(",\"class\":").Append(J.S(cls));
+            b.Append(",\"pid\":").Append(pid);
+            b.Append(",\"process\":").Append(J.S(ProcNameOf(pid)));
+            b.Append(",\"visible\":").Append(J.B(visible));
+            b.Append(",\"enabled\":").Append(J.B(enabled));
+            b.Append(",\"dialogClass\":").Append(J.B(dialog));
+            IntPtr own = TargetWindow(c);
+            if (own != IntPtr.Zero) b.Append(",\"isTarget\":").Append(J.B(h == own));
+            if (owner != IntPtr.Zero) b.Append(",\"owner\":{\"hwnd\":").Append(owner.ToInt64()).Append(",\"title\":").Append(J.S(WindowTitle(owner))).Append('}');
+            b.Append('}');
+            return true;
+        }, IntPtr.Zero);
+        StringBuilder o = new StringBuilder();
+        o.Append("{\"ok\":true");
+        if (wantPid != 0) o.Append(",\"pid\":").Append(wantPid);
+        o.Append(",\"count\":").Append(n);
+        o.Append(",\"modals\":[").Append(b.ToString()).Append(']');
+        o.Append(",\"foreground\":").Append(WinJson(Native.GetForegroundWindow()));
+        o.Append(",\"note\":").Append(J.S(n == 0
+            ? "no dialog-like or disabled windows; if the application ignores input anyway, look at the window's own state (maximized? wrong monitor?) before blaming the application"
+            : "close or answer these dialogs first - while an owned dialog is up, the owner window is disabled and every click or keystroke aimed at it is discarded"));
+        o.Append('}');
+        Emit(o.ToString());
+    }
+
+    static void Geom(Cmd c)
+    {
+        IntPtr h = TargetWindow(c);
+        if (h == IntPtr.Zero) h = Native.GetForegroundWindow();
+        if (h == IntPtr.Zero) { Err("no window (pass --hwnd or foreground is empty)"); return; }
+        Native.RECT r; Native.GetWindowRect(h, out r);
+        Native.RECT cl; Native.GetClientRect(h, out cl);
+        Native.POINT org; org.X = 0; org.Y = 0;
+        Native.ClientToScreen(h, ref org);
+        int pid; Native.GetWindowThreadProcessId(h, out pid);
+        int dpi = 96;
+        try { int d = Native.GetDpiForWindow(h); if (d > 0) dpi = d; } catch { }
+        StringBuilder o = new StringBuilder();
+        o.Append("{\"ok\":true,\"hwnd\":").Append(h.ToInt64());
+        o.Append(",\"title\":").Append(J.S(WindowTitle(h)));
+        o.Append(",\"class\":").Append(J.S(ClassOf(h)));
+        o.Append(",\"pid\":").Append(pid);
+        o.Append(",\"process\":").Append(J.S(ProcNameOf(pid)));
+        o.Append(",\"window\":{\"x\":").Append(r.Left).Append(",\"y\":").Append(r.Top).Append(",\"w\":").Append(r.Right - r.Left).Append(",\"h\":").Append(r.Bottom - r.Top).Append('}');
+        o.Append(",\"client\":{\"x\":0,\"y\":0,\"w\":").Append(cl.Right - cl.Left).Append(",\"h\":").Append(cl.Bottom - cl.Top).Append('}');
+        o.Append(",\"clientOrigin\":{\"x\":").Append(org.X).Append(",\"y\":").Append(org.Y).Append('}');
+        o.Append(",\"dpi\":").Append(dpi);
+        o.Append(",\"scale\":").Append((dpi / 96.0).ToString("0.##", CultureInfo.InvariantCulture));
+        o.Append(",\"maximized\":").Append(J.B(Native.IsZoomed(h)));
+        o.Append(",\"minimized\":").Append(J.B(Native.IsIconic(h)));
+        o.Append(",\"foreground\":").Append(J.B(Native.GetForegroundWindow() == h));
+        o.Append(",\"note\":").Append(J.S("click with --relx/--rely to address this window's client area, so the point survives moves and resizes"));
+        o.Append('}');
+        Emit(o.ToString());
+    }
+
     static void Drag(Cmd c)
     {
         int x1 = c.I("x1", int.MinValue), y1 = c.I("y1", int.MinValue), x2 = c.I("x2", int.MinValue), y2 = c.I("y2", int.MinValue);
         if (x1 == int.MinValue || y1 == int.MinValue || x2 == int.MinValue || y2 == int.MinValue)
         { Err("--x1 --y1 --x2 --y2 required"); return; }
+        if (c.Has("relx") || c.Has("rely")) ResolveRelative(c, ref x1, ref y1);
         int ms = Math.Max(60, c.I("ms", 400));
         string btn = c.Get("button", "left");
         AbsMove(x1, y1); Thread.Sleep(60);
+        VerifyPointer(x1, y1, c);
         SendMouse(ButtonFlag(btn, true), 0, 0, 0); Thread.Sleep(60);
         int steps = Math.Min(40, Math.Max(8, ms / 20));
         for (int i = 1; i <= steps; i++)
