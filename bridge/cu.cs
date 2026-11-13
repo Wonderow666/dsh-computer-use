@@ -10,6 +10,7 @@ using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows.Automation;
 
@@ -108,6 +109,18 @@ static class Native
 
     // ---------- SendInput ----------
     [DllImport("user32.dll", SetLastError = true)] public static extern uint SendInput(uint n, INPUT[] inputs, int cb);
+    [DllImport("user32.dll")] public static extern uint MapVirtualKey(uint uCode, uint uMapType);
+    [DllImport("user32.dll")] public static extern IntPtr GetKeyboardLayout(uint idThread);
+    [DllImport("user32.dll")] public static extern IntPtr LoadKeyboardLayout(string pwszKLID, uint flags);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+    // WM_GETTEXT needs a mutable buffer as lParam; this overload is the one that
+    // reads win32 edit controls without touching their selection or caret.
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr SendMessageText(IntPtr hWnd, uint msg, IntPtr wParam, StringBuilder lParam);
+    [DllImport("user32.dll")] public static extern int GetKeyboardLayoutList(int nBuff, IntPtr[] lpList);
+    [DllImport("imm32.dll")] public static extern IntPtr ImmAssociateContext(IntPtr hWnd, IntPtr hIMC);
+    [StructLayout(LayoutKind.Sequential)] public struct GUITHREADINFO { public int cbSize; public uint flags; public IntPtr hwndActive; public IntPtr hwndFocus; public IntPtr hwndCapture; public IntPtr hwndMenuOwner; public IntPtr hwndMoveSize; public IntPtr hwndCaret; public int rcLeft; public int rcTop; public int rcRight; public int rcBottom; }
+    [DllImport("user32.dll")] public static extern bool GetGUIThreadInfo(uint idThread, ref GUITHREADINFO pgui);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 
     [StructLayout(LayoutKind.Sequential)]
     public struct MOUSEINPUT { public int dx, dy; public uint mouseData, dwFlags, time; public IntPtr dwExtraInfo; }
@@ -245,11 +258,16 @@ static class Program
             case "hover": Hover(c); break;
             case "geom": Geom(c); break;
             case "modals": Modals(c); break;
+                case "readtext": ReadText(c); break;
+                case "waittext": WaitText(c); break;
                 case "move": Mouse(c, "move"); break;
                 case "click": Mouse(c, "click"); break;
                 case "scroll": Mouse(c, "scroll"); break;
                 case "drag": Drag(c); break;
                 case "type": TypeText(c); break;
+                case "typekeys": TypeKeys(c); break;
+                case "ime": Ime(c); break;
+                case "typepost": TypePost(c); break;
                 case "key": KeyCombo(c); break;
                 case "focus": Focus(c); break;
                 case "launch": Launch(c); break;
@@ -296,7 +314,9 @@ static class Program
 "commands:\n" +
 "  info                          monitors, dpi, cursor, foreground window\n" +
 "  windows [--all]               list top-level windows\n" +
-"  shot --out FILE [--hwnd H] [--region l,t,r,b] [--nocursor] [--printwindow]\n" +
+"  shot --out FILE [--hwnd H] [--region l,t,r,b] [--trim] [--tol N] [--pad N] [--nocursor] [--printwindow]\n" +
+"  readtext [--hwnd H] [--chars N]   read the window's text back (UIA text/value, else win32)\n" +
+"  waittext --regex R [--hwnd H] [--timeout MS]   poll readtext until the text matches\n" +
 "  tree [--hwnd H] [--depth N] [--max N]   UI Automation control-view tree with element ids\n" +
 "  find --name TEXT [--hwnd H]   search UIA elements by name/automationId\n" +
 "  hit --x X --y Y               what is under a screen point\n" +
@@ -308,7 +328,10 @@ static class Program
 "  click [--x X] [--y Y] [--relx N --rely N] [--hwnd H] [--button left|right|middle] [--count N] [--double]\n" +
 "  scroll [--x X] [--y Y] [--amount N] [--horizontal]\n" +
 "  drag --x1 X --y1 Y --x2 X --y2 Y [--ms 400]\n" +
-"  type --text TEXT | --textfile FILE   (unicode via KEYEVENTF_UNICODE)\n" +
+"  type --text TEXT | --textfile FILE [--verify]   (unicode via KEYEVENTF_UNICODE)\n" +
+"  typekeys --text TEXT [--verify]   real virtual keys (for Qt/secure fields that drop VK_PACKET)\n" +
+"  typepost --text TEXT   WM_CHAR to the focused window (last resort)\n" +
+"  ime [--list] [--hwnd H] [--disable]   switch to the en-US layout / detach IME contexts\n" +
 "  key --combo ctrl+shift+s | --text \"{ENTER}\" style combos comma separated\n" +
 "  focus --hwnd H\n" +
 "  launch --path P [--args A] [--cwd D]\n" +
@@ -576,6 +599,7 @@ static class Program
 
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outp)));
         int savedW = rect.Width, savedH = rect.Height;
+        int trimX = 0, trimY = 0, trimW = 0, trimH = 0;
         using (Bitmap bmp = new Bitmap(rect.Width, rect.Height, PixelFormat.Format32bppArgb))
         {
             bool captured = false;
@@ -595,14 +619,26 @@ static class Program
                     g.CopyFromScreen(rect.Left, rect.Top, 0, 0, rect.Size, CopyPixelOperation.SourceCopy);
                 }
             }
+            Bitmap work = bmp;
+            int offX = 0, offY = 0;
+            if (c.Has("trim"))
+            {
+                Rectangle box = ContentBox(bmp, Math.Max(0, c.I("tol", 12)), Math.Max(0, c.I("pad", 6)));
+                if ((box.Width < bmp.Width || box.Height < bmp.Height) && box.Width >= 16 && box.Height >= 16)
+                {
+                    work = bmp.Clone(box, PixelFormat.Format32bppArgb);
+                    offX = box.Left;
+                    offY = box.Top;
+                }
+            }
             if (!c.Has("nocursor"))
             {
                 try
                 {
                     Native.POINT pt; Native.GetCursorPos(out pt);
-                    int cx = pt.X - rect.Left, cy = pt.Y - rect.Top;
-                    if (cx >= 0 && cy >= 0 && cx < rect.Width && cy < rect.Height)
-                        using (Graphics g = Graphics.FromImage(bmp))
+                    int cx = pt.X - rect.Left - offX, cy = pt.Y - rect.Top - offY;
+                    if (cx >= 0 && cy >= 0 && cx < work.Width && cy < work.Height)
+                        using (Graphics g = Graphics.FromImage(work))
                             using (Pen pen = new Pen(Color.FromArgb(255, 30, 200, 255), 2))
                             {
                                 g.DrawEllipse(pen, cx - 7, cy - 7, 14, 14);
@@ -613,9 +649,9 @@ static class Program
                 catch { }
             }
             int maxw = c.I("maxw", 1600);
-            if (maxw > 0 && bmp.Width > maxw)
+            if (maxw > 0 && work.Width > maxw)
             {
-                savedH = (int)Math.Round(bmp.Height * (maxw / (double)bmp.Width));
+                savedH = (int)Math.Round(work.Height * (maxw / (double)work.Width));
                 savedW = maxw;
                 using (Bitmap small = new Bitmap(savedW, savedH))
                 {
@@ -623,12 +659,25 @@ static class Program
                     {
                         g2.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
                         g2.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
-                        g2.DrawImage(bmp, 0, 0, savedW, savedH);
+                        g2.DrawImage(work, 0, 0, savedW, savedH);
                     }
                     small.Save(outp, ImageFormat.Png);
                 }
             }
-            else bmp.Save(outp, ImageFormat.Png);
+            else
+            {
+                savedW = work.Width;
+                savedH = work.Height;
+                work.Save(outp, ImageFormat.Png);
+            }
+            if (!ReferenceEquals(work, bmp))
+            {
+                trimX = offX;
+                trimY = offY;
+                trimW = work.Width;
+                trimH = work.Height;
+                work.Dispose();
+            }
         }
         Native.POINT pc; Native.GetCursorPos(out pc);
         StringBuilder o = new StringBuilder();
@@ -636,6 +685,9 @@ static class Program
         o.Append(",\"x\":").Append(rect.Left).Append(",\"y\":").Append(rect.Top);
         o.Append(",\"w\":").Append(savedW).Append(",\"h\":").Append(savedH);
         o.Append(",\"srcW\":").Append(rect.Width).Append(",\"srcH\":").Append(rect.Height);
+        if (trimW > 0)
+            o.Append(",\"trim\":{\"x\":").Append(trimX).Append(",\"y\":").Append(trimY)
+             .Append(",\"w\":").Append(trimW).Append(",\"h\":").Append(trimH).Append('}');
         o.Append(",\"cursor\":{\"x\":").Append(pc.X).Append(",\"y\":").Append(pc.Y).Append('}');
         o.Append(",\"foreground\":").Append(WinJson(Native.GetForegroundWindow()));
         o.Append('}');
@@ -1003,6 +1055,62 @@ static class Program
     }
 
     static int this_scrollish(int notches) { return notches * 120; }
+
+    // An active CJK IME swallows injected ASCII: "hhh666" is composed into Chinese text and
+    // never reaches the application (Packet Tracer's telnet prompt showed exactly this -
+    // a password field that received only the Enter keys). Point the window at an English
+    // keyboard layout, or detach its IME context entirely, before typing ASCII.
+    static int DetachImeRecursive(IntPtr root)    {
+        int n = 0;
+        if (Native.ImmAssociateContext(root, IntPtr.Zero) != IntPtr.Zero) n++;
+        for (IntPtr child = Native.GetWindow(root, 5 /* GW_CHILD */); child != IntPtr.Zero; child = Native.GetWindow(child, 2 /* GW_HWNDNEXT */))
+            n += DetachImeRecursive(child);
+        return n;
+    }
+
+    static void Ime(Cmd c)
+    {
+        IntPtr h = TargetWindow(c);
+        if (h == IntPtr.Zero) h = Native.GetForegroundWindow();
+        IntPtr en = Native.LoadKeyboardLayout("00000409", 0x00000001 /* KLF_ACTIVATE */);
+        if (c.Has("list"))
+        {
+            IntPtr[] list = new IntPtr[16];
+            int n = Native.GetKeyboardLayoutList(list.Length, list);
+            StringBuilder sb = new StringBuilder();
+            sb.Append("{\"ok\":true,\"count\":").Append(n).Append(",\"layouts\":[");
+            for (int i = 0; i < n; i++)
+            {
+                if (i > 0) sb.Append(",");
+                sb.Append("\"").Append(list[i].ToInt64().ToString("x")).Append("\"");
+            }
+            sb.Append("],\"enLoaded\":").Append(en != IntPtr.Zero ? "true" : "false").Append("}");
+            Emit(sb.ToString());
+            return;
+        }
+        bool had = false;
+        if (c.Has("disable"))
+        {
+            int detached = DetachImeRecursive(h);
+            had = detached > 0;
+        }
+        int tid = 0;
+        int fpid = 0;
+        tid = (int)Native.GetWindowThreadProcessId(h, out fpid);
+        Native.GUITHREADINFO gi = new Native.GUITHREADINFO();
+        gi.cbSize = Marshal.SizeOf(typeof(Native.GUITHREADINFO));
+        bool haveGi = Native.GetGUIThreadInfo((uint)tid, ref gi);
+        IntPtr focus = haveGi ? gi.hwndFocus : IntPtr.Zero;
+        if (focus != IntPtr.Zero && en != IntPtr.Zero)
+            Native.SendMessage(focus, 0x0050 /* WM_INPUTLANGCHANGEREQUEST */, IntPtr.Zero, en);
+        if (en != IntPtr.Zero) Native.SendMessage(h, 0x0050 /* WM_INPUTLANGCHANGEREQUEST */, IntPtr.Zero, en);
+        Thread.Sleep(150);
+        Emit("{\"ok\":true,\"action\":\"ime\",\"hwnd\":" + h.ToInt64()
+            + ",\"detached\":" + (had ? "yes" : "no")
+            + ",\"thread\":" + tid
+            + ",\"focusHwnd\":" + focus.ToInt64()
+            + ",\"layoutSwitched\":" + (en != IntPtr.Zero ? "true" : "false") + "}");
+    }
 
     static IntPtr TargetWindow(Cmd c)
     {
@@ -1422,7 +1530,9 @@ static class Program
         Native.INPUT[] a = new Native.INPUT[1];
         a[0].type = Native.INPUT_KEYBOARD;
         a[0].u.ki.wVk = vk;
-        a[0].u.ki.wScan = 0;
+        // A real keyboard always reports a scan code; Qt widgets that read raw key events
+        // (Packet Tracer's telnet password prompt does) ignore synthesized keys without one.
+        a[0].u.ki.wScan = (ushort)Native.MapVirtualKey(vk, 0);
         a[0].u.ki.dwFlags = down ? 0 : Native.KEYEVENTF_KEYUP;
         bool ext = vk >= 0x21 && vk <= 0x2E && vk != 0x20 && vk != 0x09 && vk != 0x0D && vk != 0x1B;
         if (vk == 0x2E || vk == 0x2D || vk == 0x24 || vk == 0x23 || vk == 0x21 || vk == 0x22 || vk == 0x25 || vk == 0x26 || vk == 0x27 || vk == 0x5B || vk == 0x5C || vk == 0x5D)
@@ -1437,6 +1547,266 @@ static class Program
         a[0].type = Native.INPUT_KEYBOARD; a[0].u.ki.wVk = 0; a[0].u.ki.wScan = ch; a[0].u.ki.dwFlags = Native.KEYEVENTF_UNICODE;
         a[1].type = Native.INPUT_KEYBOARD; a[1].u.ki.wVk = 0; a[1].u.ki.wScan = ch; a[1].u.ki.dwFlags = Native.KEYEVENTF_UNICODE | Native.KEYEVENTF_KEYUP;
         Native.SendInput(2, a, Marshal.SizeOf(typeof(Native.INPUT)));
+    }
+
+    // ---------------- reading text back ----------------
+    //
+    // Screenshots + OCR are the expensive way to answer "what does this window
+    // say". Most windows answer directly: UIA exposes TextPattern (documents,
+    // terminals, Qt labels) and ValuePattern (edit boxes), and classic win32
+    // controls answer WM_GETTEXT. Try both channels and keep whichever yields
+    // more text, so one command works for Notepad, a WinForms app and a Qt app
+    // without per-app code.
+
+    static IntPtr TargetHwndOrForeground(Cmd c)
+    {
+        string s = c.Get("hwnd", null);
+        if (s != null)
+        {
+            long v;
+            if (long.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out v)) return new IntPtr(v);
+        }
+        return Native.GetForegroundWindow();
+    }
+
+    static string Normalize(string s)
+    {
+        if (s == null) return "";
+        return Regex.Replace(s, "\\s+", " ").Trim();
+    }
+
+    static string Win32Text(IntPtr hwnd, out string sources)
+    {
+        List<string> parts = new List<string>();
+        StringBuilder src = new StringBuilder();
+        Native.EnumChildWindows(hwnd, delegate(IntPtr ch, IntPtr lp)
+        {
+            if (!Native.IsWindowVisible(ch)) return true;
+            StringBuilder sb = new StringBuilder(8192);
+            try { Native.SendMessageText(ch, 0x000D /* WM_GETTEXT */, new IntPtr(8192), sb); }
+            catch { }
+            string t = sb.ToString();
+            if (t.Trim().Length == 0) return true;
+            if (parts.Contains(t)) return true;
+            parts.Add(t);
+            if (src.Length > 0) src.Append(',');
+            src.Append("{\"source\":\"win32\",\"hwnd\":").Append(ch.ToInt64());
+            src.Append(",\"class\":").Append(J.S(ClassOf(ch))).Append(",\"chars\":").Append(t.Length).Append('}');
+            return true;
+        }, IntPtr.Zero);
+        sources = "[" + src.ToString() + "]";
+        return string.Join("\n", parts.ToArray());
+    }
+
+    static void WalkText(AutomationElement el, TreeWalker walker, int depth, ref int nodes, int maxNodes, int maxChars, ref int chars, List<string> parts, StringBuilder src)
+    {
+        if (el == null || depth > 24 || nodes > maxNodes || chars >= maxChars) return;
+        nodes++;
+        string got = null;
+        string via = null;
+        try
+        {
+            object tp;
+            if (el.TryGetCurrentPattern(TextPattern.Pattern, out tp))
+            {
+                string s = ((TextPattern)tp).DocumentRange.GetText(Math.Min(8192, Math.Max(64, maxChars - chars)));
+                if (s != null && s.Trim().Length > 0) { got = s; via = "text"; }
+            }
+        }
+        catch { }
+        if (got == null)
+        {
+            try
+            {
+                object vp;
+                if (el.TryGetCurrentPattern(ValuePattern.Pattern, out vp))
+                {
+                    string s = ((ValuePattern)vp).Current.Value;
+                    if (s != null && s.Trim().Length > 0) { got = s; via = "value"; }
+                }
+            }
+            catch { }
+        }
+        if (got != null && !parts.Contains(got))
+        {
+            parts.Add(got);
+            chars += got.Length;
+            if (src.Length > 0) src.Append(',');
+            string role = "";
+            try { role = Safe(el.Current.ControlType.ProgrammaticName.Replace("ControlType.", "")); } catch { }
+            src.Append("{\"source\":\"uia\",\"role\":").Append(J.S(role)).Append(",\"via\":").Append(J.S(via));
+            src.Append(",\"chars\":").Append(got.Length).Append('}');
+        }
+        AutomationElement child = null;
+        try { child = walker.GetFirstChild(el); } catch { }
+        while (child != null)
+        {
+            WalkText(child, walker, depth + 1, ref nodes, maxNodes, maxChars, ref chars, parts, src);
+            try { child = walker.GetNextSibling(child); } catch { child = null; }
+        }
+    }
+
+    static string UiaText(IntPtr hwnd, int maxChars, out string sources)
+    {
+        List<string> parts = new List<string>();
+        StringBuilder src = new StringBuilder();
+        int nodes = 0, chars = 0;
+        try
+        {
+            AutomationElement root = AutomationElement.FromHandle(hwnd);
+            if (root != null) WalkText(root, TreeWalker.ControlViewWalker, 0, ref nodes, 800, maxChars, ref chars, parts, src);
+            // Some toolkits hide text from the control view but expose it in the
+            // raw view (WPF popups, Java/Swing, custom Qt widgets), so retry once.
+            if (chars == 0)
+            {
+                nodes = 0;
+                WalkText(root, TreeWalker.RawViewWalker, 0, ref nodes, 400, maxChars, ref chars, parts, src);
+            }
+        }
+        catch { }
+        sources = "[" + src.ToString() + "]";
+        return string.Join("\n", parts.ToArray());
+    }
+
+    static string GatherText(IntPtr hwnd, int maxChars, out string strategy, out string sources)
+    {
+        string uiaSrc, winSrc;
+        string uia = UiaText(hwnd, maxChars, out uiaSrc);
+        string win = Win32Text(hwnd, out winSrc);
+        if (uia.Length >= win.Length)
+        {
+            strategy = uia.Length > 0 ? "uia" : "none";
+            sources = uiaSrc;
+            return uia;
+        }
+        strategy = "win32";
+        sources = winSrc;
+        return win;
+    }
+
+    static void ReadText(Cmd c)
+    {
+        IntPtr hwnd = TargetHwndOrForeground(c);
+        int maxChars = Math.Max(200, c.I("chars", 20000));
+        string strategy, sources;
+        string text = GatherText(hwnd, maxChars, out strategy, out sources);
+        if (text.Length > maxChars) text = text.Substring(0, maxChars);
+        StringBuilder o = new StringBuilder();
+        o.Append("{\"ok\":true,\"hwnd\":").Append(hwnd.ToInt64());
+        o.Append(",\"title\":").Append(J.S(WindowTitle(hwnd)));
+        o.Append(",\"chars\":").Append(text.Length);
+        o.Append(",\"strategy\":").Append(J.S(strategy));
+        o.Append(",\"sources\":").Append(sources);
+        if (text.Length == 0)
+            o.Append(",\"hint\":\"this window exposes no text (Chromium without renderer accessibility, custom-drawn UI); take a screenshot instead\"");
+        o.Append(",\"text\":").Append(J.S(text)).Append('}');
+        Emit(o.ToString());
+    }
+
+    static void WaitText(Cmd c)
+    {
+        string pattern = c.Get("regex", null);
+        if (pattern == null) { Err("--regex is required"); return; }
+        Regex rx;
+        try { rx = new Regex(pattern, RegexOptions.CultureInvariant); }
+        catch (Exception ex) { Err("bad --regex: " + ex.Message); return; }
+        IntPtr hwnd = TargetHwndOrForeground(c);
+        int timeout = Math.Max(50, c.I("timeout", 8000));
+        int interval = Math.Max(50, c.I("interval", 150));
+        int maxChars = Math.Max(200, c.I("chars", 20000));
+        int tail = Math.Max(0, c.I("tail", 2000));
+        Stopwatch sw = Stopwatch.StartNew();
+        string text = "", strategy = "none", sources = "[]";
+        bool matched = false;
+        while (true)
+        {
+            text = GatherText(hwnd, maxChars, out strategy, out sources);
+            if (text.Length > maxChars) text = text.Substring(0, maxChars);
+            if (rx.IsMatch(text)) { matched = true; break; }
+            if (sw.ElapsedMilliseconds >= timeout) break;
+            Thread.Sleep(interval);
+        }
+        string shown = tail > 0 && text.Length > tail ? text.Substring(text.Length - tail) : text;
+        StringBuilder o = new StringBuilder();
+        o.Append("{\"ok\":").Append(matched ? "true" : "false");
+        if (!matched)
+            o.Append(",\"error\":").Append(J.S("text did not match /" + pattern + "/ within " + sw.ElapsedMilliseconds +
+                "ms (strategy " + strategy + ", " + text.Length + " chars read)"));
+        o.Append(",\"matched\":").Append(matched ? "true" : "false");
+        o.Append(",\"waitedMs\":").Append(sw.ElapsedMilliseconds);
+        o.Append(",\"hwnd\":").Append(hwnd.ToInt64());
+        o.Append(",\"strategy\":").Append(J.S(strategy));
+        o.Append(",\"chars\":").Append(text.Length);
+        o.Append(",\"text\":").Append(J.S(shown)).Append('}');
+        Emit(o.ToString());
+    }
+
+    // ---------------- trimming captures ----------------
+
+    static void Bump(Dictionary<int, int> d, int v)
+    {
+        int n;
+        d.TryGetValue(v, out n);
+        d[v] = n + 1;
+    }
+
+    // A screenshot of a dialog is mostly background: cropping to the ink bbox
+    // makes the evidence legible when it lands in a report and stops "the crop
+    // missed the window" from shipping as a blank figure.
+    static Rectangle ContentBox(Bitmap bmp, int tol, int pad)
+    {
+        int w = bmp.Width, h = bmp.Height;
+        Rectangle full = new Rectangle(0, 0, w, h);
+        if (w < 8 || h < 8) return full;
+        int[] px = new int[w * h];
+        BitmapData bd = null;
+        try
+        {
+            bd = bmp.LockBits(full, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            if (bd.Stride == w * 4) Marshal.Copy(bd.Scan0, px, 0, px.Length);
+            else
+            {
+                for (int y = 0; y < h; y++)
+                    Marshal.Copy(new IntPtr(bd.Scan0.ToInt64() + (long)y * bd.Stride), px, y * w, w);
+            }
+        }
+        catch { return full; }
+        finally { if (bd != null) { try { bmp.UnlockBits(bd); } catch { } } }
+
+        Dictionary<int, int> hist = new Dictionary<int, int>();
+        int stepX = Math.Max(1, w / 200), stepY = Math.Max(1, h / 200);
+        for (int x = 0; x < w; x += stepX) { Bump(hist, px[x]); Bump(hist, px[(h - 1) * w + x]); }
+        for (int y = 0; y < h; y += stepY) { Bump(hist, px[y * w]); Bump(hist, px[y * w + w - 1]); }
+        int bg = 0, best = -1;
+        foreach (KeyValuePair<int, int> kv in hist) if (kv.Value > best) { best = kv.Value; bg = kv.Key; }
+        int br = (bg >> 16) & 0xFF, bgg = (bg >> 8) & 0xFF, bb = bg & 0xFF;
+
+        int minX = w, minY = h, maxX = -1, maxY = -1;
+        for (int y = 0; y < h; y++)
+        {
+            int row = y * w;
+            for (int x = 0; x < w; x++)
+            {
+                int p = px[row + x];
+                if (Math.Abs(((p >> 16) & 0xFF) - br) > tol ||
+                    Math.Abs(((p >> 8) & 0xFF) - bgg) > tol ||
+                    Math.Abs((p & 0xFF) - bb) > tol)
+                {
+                    if (x < minX) minX = x;
+                    if (x > maxX) maxX = x;
+                    if (y < minY) minY = y;
+                    if (y > maxY) maxY = y;
+                }
+            }
+        }
+        if (maxX < 0) return full;
+        minX = Math.Max(0, minX - pad);
+        minY = Math.Max(0, minY - pad);
+        maxX = Math.Min(w - 1, maxX + pad);
+        maxY = Math.Min(h - 1, maxY + pad);
+        Rectangle box = new Rectangle(minX, minY, maxX - minX + 1, maxY - minY + 1);
+        if (box.Width < 16 || box.Height < 16) return full;
+        return box;
     }
 
     static void TypeText(Cmd c)
@@ -1454,7 +1824,143 @@ static class Program
             else UnicodeChar(ch);
             Thread.Sleep(2);
         }
+        // --verify closes the loop the app cannot: keystrokes can be swallowed by
+        // an IME composition, a secure field or a lost focus, and the only honest
+        // answer is whether the text actually showed up in the window.
+        if (c.Has("verify"))
+        {
+            IntPtr hwnd = TargetHwndOrForeground(c);
+            int maxChars = Math.Max(4000, text.Length * 8);
+            string strategy, sources;
+            string seen = GatherText(hwnd, maxChars, out strategy, out sources);
+            if (seen.Trim().Length == 0)
+            {
+                Emit("{\"ok\":true,\"action\":\"type\",\"chars\":" + text.Length +
+                     ",\"verified\":\"unavailable\",\"strategy\":\"none\"," +
+                     "\"hint\":\"this window exposes no text channel; verify the result visually\"}");
+                return;
+            }
+            string want = Normalize(text);
+            string have = Normalize(seen);
+            bool hit = want.Length > 0 && have.IndexOf(want, StringComparison.OrdinalIgnoreCase) >= 0;
+            if (hit)
+            {
+                Emit("{\"ok\":true,\"action\":\"type\",\"chars\":" + text.Length +
+                     ",\"verified\":true,\"strategy\":" + J.S(strategy) + "}");
+                return;
+            }
+            string tail = want.Length > 60 ? want.Substring(want.Length - 60) : want;
+            Err("typed text did not show up in the window (strategy " + strategy + ", " + seen.Length +
+                " chars read). The app may have swallowed the keystrokes - IME composition, a secure field, " +
+                "or lost focus. Wanted the last part: \"" + tail + "\"; read back: \"" +
+                (have.Length > 200 ? have.Substring(have.Length - 200) : have) + "\"");
+            return;
+        }
         Emit("{\"ok\":true,\"action\":\"type\",\"chars\":" + text.Length + "}");
+    }
+
+    // Map a printable ASCII character to the virtual-key that a real keyboard would send.
+    // Some Qt/UIA apps ignore KEYEVENTF_UNICODE (VK_PACKET) for secure fields such as a
+    // telnet password prompt, so the driver needs a genuine key event path as well.
+    static ushort VkOfChar(char ch, out bool needShift)
+    {
+        needShift = false;
+        if (ch >= 'a' && ch <= 'z') return (ushort)char.ToUpperInvariant(ch);
+        if (ch >= 'A' && ch <= 'Z') { needShift = true; return (ushort)ch; }
+        if (ch >= '0' && ch <= '9') return (ushort)ch;
+        switch (ch)
+        {
+            case ' ': return 0x20;
+            case '.': return 0xBE;
+            case ',': return 0xBC;
+            case '-': return 0xBD;
+            case '_': needShift = true; return 0xBD;
+            case '/': return 0xBF;
+            case ';': return 0xBA;
+            case ':': needShift = true; return 0xBA;
+            case '=': return 0xBB;
+            case '+': needShift = true; return 0xBB;
+            case '[': return 0xDB;
+            case ']': return 0xDD;
+            case '\\': return 0xDC;
+            case '\'': return 0xDE;
+            case '`': return 0xC0;
+            case '\t': return 0x09;
+            case '!': needShift = true; return 0x31;
+            case '@': needShift = true; return 0x32;
+            case '#': needShift = true; return 0x33;
+            case '$': needShift = true; return 0x34;
+            case '%': needShift = true; return 0x35;
+            case '^': needShift = true; return 0x36;
+            case '&': needShift = true; return 0x37;
+            case '*': needShift = true; return 0x38;
+            case '(': needShift = true; return 0x39;
+            case ')': needShift = true; return 0x30;
+            case '?': needShift = true; return 0xBF;
+            case '<': needShift = true; return 0xBC;
+            case '>': needShift = true; return 0xBE;
+            case '"': needShift = true; return 0xDE;
+        }
+        return 0;
+    }
+
+    // Last-resort text path: post WM_CHAR straight into the window's queue. Some Qt widgets
+    // (Packet Tracer's telnet password box among them) reject synthesized key events but still
+    // honour character messages, which is what this uses.
+    static void TypePost(Cmd c)
+    {
+        string text = c.Get("text", null);
+        string file = c.Get("textfile", null);
+        if (file != null) text = File.ReadAllText(file, Encoding.UTF8);
+        if (text == null) { Err("--text or --textfile is required"); return; }
+        IntPtr h = TargetWindow(c);
+        if (h == IntPtr.Zero) h = Native.GetForegroundWindow();
+        if (h == IntPtr.Zero) throw new Exception("no target window");
+        int n = 0;
+        foreach (char ch in text)
+        {
+            if (ch == '\r') continue;
+            uint msg = ch == '\n' ? 0x0100u : 0x0102u; // WM_KEYDOWN for Enter, WM_CHAR otherwise
+            if (ch == '\n')
+            {
+                Native.PostMessage(h, 0x0100, (IntPtr)0x0D, (IntPtr)0x001C0001);
+                Native.PostMessage(h, 0x0102, (IntPtr)0x0D, (IntPtr)0x001C0001);
+                Native.PostMessage(h, 0x0101, (IntPtr)0x0D, (IntPtr)0xC01C0001);
+            }
+            else
+            {
+                Native.PostMessage(h, msg, (IntPtr)ch, (IntPtr)1);
+            }
+            n++;
+            Thread.Sleep(12);
+        }
+        Emit("{\"ok\":true,\"action\":\"typepost\",\"chars\":" + n + "}");
+    }
+
+    static void TypeKeys(Cmd c)
+    {
+        string text = c.Get("text", null);
+        string file = c.Get("textfile", null);
+        if (file != null) text = File.ReadAllText(file, Encoding.UTF8);
+        if (text == null) { Err("--text or --textfile is required"); return; }
+        RequireForeground(c);
+        const ushort VK_SHIFT = 0x10;
+        int typed = 0;
+        foreach (char ch in text)
+        {
+            if (ch == '\r') continue;
+            if (ch == '\n') { KeyDownUp(0x0D, true); KeyDownUp(0x0D, false); typed++; Thread.Sleep(6); continue; }
+            bool shift;
+            ushort vk = VkOfChar(ch, out shift);
+            if (vk == 0) { UnicodeChar(ch); typed++; Thread.Sleep(6); continue; }
+            if (shift) KeyDownUp(VK_SHIFT, true);
+            KeyDownUp(vk, true);
+            KeyDownUp(vk, false);
+            if (shift) KeyDownUp(VK_SHIFT, false);
+            typed++;
+            Thread.Sleep(6);
+        }
+        Emit("{\"ok\":true,\"action\":\"typekeys\",\"chars\":" + typed + "}");
     }
 
     static void KeyCombo(Cmd c)

@@ -12,7 +12,8 @@ export const state = {
     { hwnd: 656368, title: "DeepSeek Harness", class: "Chrome_WidgetWin_1", process: "chrome.exe", pid: 32992, visible: true, foreground: true, rect: { x: 318, y: 149, w: 1923, h: 1234 } },
     { hwnd: 999001, title: "Untitled - Notepad", class: "Notepad", process: "notepad.exe", pid: 4242, visible: true, foreground: false, rect: { x: 40, y: 40, w: 900, h: 700 } }
   ],
-  failNext: null
+  failNext: null,
+  typeVerify: null
 };
 
 export const calls = [];
@@ -37,7 +38,33 @@ function payload(cmd, o) {
     case "windows":
       return { ok: true, count: state.windows.length, foreground: state.foreground, windows: state.windows };
     case "shot":
-      return { ok: true, path: o.out, x: 0, y: 0, w: Number(o.maxw || 1600), h: Math.round(Number(o.maxw || 1600) * 1600 / 2560), srcW: 2560, srcH: 1600, cursor: { x: 800, y: 600 }, foreground: state.foreground };
+      return {
+        ok: true, path: o.out, x: 0, y: 0,
+        w: Number(o.maxw || 1600), h: Math.round(Number(o.maxw || 1600) * 1600 / 2560),
+        srcW: 2560, srcH: 1600,
+        ...(o.trim ? { trim: { x: 12, y: 30, w: 400, h: 120 } } : {}),
+        cursor: { x: 800, y: 600 }, foreground: state.foreground
+      };
+    case "readtext":
+      return {
+        ok: true, hwnd: Number(o.hwnd), title: state.foreground.title,
+        chars: 12, strategy: "uia", sources: [{ source: "uia", role: "Edit", via: "text", chars: 12 }],
+        text: "hello world\n"
+      };
+    case "waittext":
+      return {
+        ok: true, matched: true, waitedMs: 42, hwnd: Number(o.hwnd), strategy: "uia", chars: 12, text: "RA#"
+      };
+    case "type":
+      if (!o.verify) return { ok: true, action: "type", chars: 7 };
+      if (state.typeVerify === "mismatch") {
+        return {
+          ok: false,
+          error: "typed text did not show up in the window (strategy uia, 30 chars read). The app may have swallowed the keystrokes - IME composition, a secure field, or lost focus. Wanted the last part: \"x\"; read back: \"nothing\""
+        };
+      }
+      if (state.typeVerify === "ok") return { ok: true, action: "type", chars: 7, verified: true, strategy: "uia" };
+      return { ok: true, action: "type", chars: 7, verified: "unavailable", strategy: "none" };
     case "tree":
       return { ok: true, nodes: [{ id: "0", name: "Window", type: "Window", hwnd: Number(o.hwnd) }, { id: "0.1.2", name: "Save", type: "Button", rect: { x: 10, y: 20, w: 80, h: 24 } }] };
     case "find":

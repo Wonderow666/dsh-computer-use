@@ -256,6 +256,54 @@ console.log("\n[invoke + dryRun]");
   });
 }
 
+console.log("\n[readtext / waittext / trim / verify]");
+{
+  const t = boot();
+  const r = text(await t.execute({ action: "readtext", hwnd: "656368" }, {}));
+  check("readtext passes the window and returns the text", () => {
+    eq(callOf("readtext")[0].argv, ["readtext", "--hwnd", "656368"]);
+    eq(r.strategy, "uia");
+    assert.match(r.text, /hello/);
+  });
+  await t.execute({ action: "readtext", hwnd: "656368", chars: 500 }, {});
+  check("readtext forwards chars", () => eq(callOf("readtext")[1].argv, ["readtext", "--hwnd", "656368", "--chars", "500"]));
+
+  const wt = text(await t.execute({ action: "waittext", hwnd: "656368", regex: "RA[>#]", timeout: 2000 }, {}));
+  check("waittext forwards the regex and timeout", () => {
+    eq(callOf("waittext")[0].argv, ["waittext", "--hwnd", "656368", "--regex", "RA[>#]", "--timeout", "2000"]);
+    eq(wt.matched, true);
+  });
+  await assert.rejects(() => t.execute({ action: "waittext" }, {}), /requires `regex`/);
+  check("waittext requires a regex", () => {});
+
+  const s = text(await t.execute({ action: "screenshot", trim: true, tol: 20, pad: 4 }, {}));
+  check("screenshot forwards trim options", () => {
+    const a = callOf("shot")[0].argv;
+    assert.ok(a.includes("--trim"));
+    eq(a[a.indexOf("--tol") + 1], "20");
+    eq(a[a.indexOf("--pad") + 1], "4");
+    assert.ok(s.trim);
+  });
+  await t.execute({ action: "screenshot" }, {});
+  check("screenshot does not trim by default", () => assert.ok(!callOf("shot")[1].argv.includes("--trim")));
+
+  await t.execute({ action: "type", hwnd: "656368", text: "echo hi", verify: true }, {});
+  check("type --verify reaches the engine", () => {
+    const a = callOf("type")[0].argv;
+    assert.ok(a.includes("--verify"));
+    eq(a[a.indexOf("--text") + 1], "echo hi");
+  });
+  const tv = text(await t.execute({ action: "type", hwnd: "656368", text: "x", verify: true }, {}));
+  check("type verify reports unavailable when the window has no text", () => eq(tv.verified, "unavailable"));
+  cp.state.typeVerify = "ok";
+  const tv2 = text(await t.execute({ action: "type", hwnd: "656368", text: "x", verify: true }, {}));
+  check("type verify passes through when the text appeared", () => eq(tv2.verified, true));
+  cp.state.typeVerify = "mismatch";
+  await assert.rejects(() => t.execute({ action: "type", hwnd: "656368", text: "x", verify: true }, {}), /did not show up/);
+  check("type verify fails when the app swallowed the text", () => {});
+  cp.state.typeVerify = null;
+}
+
 console.log("\n[engine failure]");
 {
   const t = boot({ timeoutMs: 5000 });

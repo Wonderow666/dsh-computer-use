@@ -50,26 +50,39 @@ dsh plugin --profile desktop add link:F:\path\to\dsh-computer-use
 
 重启后模型侧多出一个 `computer` 工具。插件配置在 `cordis.patch.yml`（`blockedProcesses`、`refuseFullscreenForeground`、`allowProcessControl`、`timeoutMs`、`enginePath`、`artifactsDir`），profile 自己的 `cordis.patch.yml` 可以按 id 覆盖这些字段。
 
-## 工具面（单一 `computer`，23 个 action）
+## 工具面（单一 `computer`，27 个 action）
 
 | 类别 | action | 返回 |
 | --- | --- | --- |
 | 预检 | `inputcheck` | 移动光标再复位，回报 `landed`/`integrity`/`locked`/`pointerDrifting` 与一句结论。**动手前先跑它** |
 | 观察 | `info` | 屏幕/虚拟桌面尺寸、每台显示器 dpi 与缩放、光标、前台窗口、`locked`、输入桌面名 |
 | | `windows` / `procs` | 顶层窗口（hwnd/title/class/process/pid/rect/foreground）或进程列表 |
-| | `screenshot` | PNG 路径 + `srcW/srcH/w/h/scale`，默认缩到 1600 宽；支持 `region` 裁剪 |
+| | `screenshot` | PNG 路径 + `srcW/srcH/w/h/scale`，默认缩到 1600 宽；支持 `region` 裁剪与 **`trim`（按内容裁剪）** |
 | | `snapshot` | UI Automation 控制树，元素 id 形如 `0.2.1`，带类型与矩形 |
 | | `find` / `hit` | 按名称找控件 / 查某坐标下是什么窗口与控件 |
 | | `geom` | 窗口矩形 + **客户区原点** + dpi，几何断言的唯一来源 |
 | | `modals` | 枚举 `#32770` 对话框、带 owner 的弹窗、被禁用的顶层窗口（“输入被吞”的第一嫌疑人） |
 | | `hover` | 移到目标控件驻留后读 UIA 的 name/helpText/acceleratorKey 与 `tooltips_class32` 文本 |
+| | **`readtext`** | 把窗口的文字读回来（UIA Text/Value → win32 `WM_GETTEXT` 兜底），返回 `text`/`strategy`/`sources` |
+| | **`waittext`** | 轮询 `readtext` 直到正则命中，返回 `matched`/`waitedMs`/`text`；超时给出已读到的尾部文本 |
 | 输入 | `click` `move` `scroll` `drag` | SendInput 注入，物理像素坐标；支持 `hwnd`/`title` 定位与 **`relx`/`rely`（客户区相对坐标）** |
-| | `type` `key` | Unicode 键入（中文安全）；`key` 走组合键 `"ctrl+shift+s"`，逗号分隔连续按键 |
+| | `type` `key` | Unicode 键入（中文安全）；**`type` 可加 `verify`** 回读校验；`key` 走组合键 `"ctrl+shift+s"` |
 | | `invoke` | 通过 UIA 的 Invoke/Toggle/Select/SetValue 模式驱动控件，不依赖焦点与像素 |
 | 生命周期 | `launch` `kill` `focus` `wait` | 启动进程（可带参数/工作目录）、结束进程、置前、等待 |
 | 杂项 | `clipboard` | 读写剪贴板 |
 
 `click`/`move`/`drag` 会**验证注入是否真的落地**：注入后读回光标，偏差超过 2px 就报错并附诊断，而不是假装成功。窗口移动/缩放后坐标失效的问题，用 `relx`/`rely` 解决——它们是相对目标窗口客户区的偏移，引擎每次实时解析成屏幕坐标。
+
+### 为什么要有 `readtext` / `waittext` / `trim` / `verify`
+
+前三个版本里，“操作对不对”只能靠截图 + OCR 判断，代价是每验证一步都要一次视觉调用；而“命令敲进去没有”只能靠猜，于是会踩到两类静默失败：**IME 把注入的 ASCII 组合成中文**、**提示符还没出来就敲下一条**。v0.3.0 把这两件事都做进工具：
+
+- `readtext`：UIA 的 TextPattern / ValuePattern 优先，win32 `WM_GETTEXT` 兜底，取“读到字符最多的通道”。终端、控制台、编辑器、WinForms、多数 Qt 控件都能直接返回文字（实测 cmd 控制台一次读到整个屏幕缓冲区）。读不到时返回 `strategy: "none"` 和一句 `hint`，**不会拿标题冒充内容**。
+- `waittext --regex`：把“等提示符”变成一次调用。`waittext --regex "RA[>#]" --timeout 5000` 命中即返回，超时把已经读到的尾部文本一起带回来，便于判断卡在哪。
+- `screenshot --trim`：按内容裁掉空白边。生成报告时特别有用——实测同一个控制台截图从 678 KB 掉到 12 KB，插进文档也不会变成"一大片空白里有个小窗口"。
+- `type --verify`：打完字回读一次，文本没出现就**报错**而不是假装成功（输入法组合、密码框、焦点丢失都会被抓到）；窗口没有文本通道时返回 `verified: "unavailable"`，明确告诉模型改用视觉核对。
+
+限制也写清楚：Chromium 系窗口默认不暴露渲染内容（需要 `--force-renderer-accessibility`），此时 `readtext` 会诚实地返回 `none` 而不是编造文本；`--trim` 只在背景比较单色时有效，照片壁纸背景会被判成"全是内容"从而不裁。
 
 一次典型调用看起来是这样（模型侧）：
 
@@ -157,11 +170,14 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1
 # 连测试夹具一起编（test/target/target.exe，供 input.mjs 用）
 powershell -ExecutionPolicy Bypass -File .\build.ps1 -Test
 
-# 插件契约单测：mock 掉引擎，校验 argv 映射/窗口解析/安全闸/干跑/长文本落盘（49 项）
+# 插件契约单测：mock 掉引擎，校验 argv 映射/窗口解析/安全闸/干跑/长文本落盘（59 项）
 node test\run-tests.mjs
 
 # 真机观察链路：真插件 + 真 spawn + 真 cu.exe，只读不注入
 node test\e2e.mjs
+
+# 文本通道与裁剪：launch cmd → readtext → waittext → trim（只读，不抢焦点）
+node test\readtext.mjs
 
 # 控制台闭环：launch cmd → 打字 → 回车 → 校验命令真的执行了（会抢焦点）
 node test\console.mjs
@@ -170,9 +186,9 @@ node test\console.mjs
 node test\input.mjs
 ```
 
-最近一次全量结果：`49 passed, 0 failed`；`e2e.mjs` 观察链路 OK；`console.mjs` 七步全过；`input.mjs` 两条闭环都 `MATCH`（`SendInput` 键盘与 UIA `SetValue`/`Invoke` 各自独立验证）。
+最近一次全量结果：`59 passed, 0 failed`；`e2e.mjs` 观察链路 OK；`readtext.mjs` 10 项全过（控制台读到 400 字符、`waittext` 109 ms 命中提示符、`--trim` 1440×720 → 483×720 且 PNG 678 KB → 12 KB）；`console.mjs` 七步全过；`input.mjs` 两条闭环都 `MATCH`（`SendInput` 键盘与 UIA `SetValue`/`Invoke` 各自独立验证）。
 
-CI（`.github/workflows/ci.yml`，windows-latest）每次 push 会自动跑「编译桥 → 断言 `bin/cu.exe` 存在 → 49 项契约单测」，并把编出来的 `cu.exe` 作为 artifact 上传。它只跑不抢焦点的部分，真机注入脚本 `console.mjs` / `input.mjs` 需要人盯着，不进 CI。
+CI（`.github/workflows/ci.yml`，windows-latest）每次 push 会自动跑「编译桥 → 断言 `bin/cu.exe` 存在 → 59 项契约单测」，并把编出来的 `cu.exe` 作为 artifact 上传。它只跑不抢焦点的部分，真机注入脚本 `console.mjs` / `input.mjs` 需要人盯着，不进 CI。
 
 `bin/cu.exe` 也可以单独用，方便排查（它自己就是命令行程序，JSON 打到 stdout）：
 
