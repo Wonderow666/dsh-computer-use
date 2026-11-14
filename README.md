@@ -50,7 +50,7 @@ dsh plugin --profile desktop add link:F:\path\to\dsh-computer-use
 
 重启后模型侧多出一个 `computer` 工具。插件配置在 `cordis.patch.yml`（`blockedProcesses`、`refuseFullscreenForeground`、`allowProcessControl`、`timeoutMs`、`enginePath`、`artifactsDir`），profile 自己的 `cordis.patch.yml` 可以按 id 覆盖这些字段。
 
-## 工具面（单一 `computer`，30 个 action）
+## 工具面（单一 `computer`，34 个 action）
 
 | 类别 | action | 返回 |
 | --- | --- | --- |
@@ -72,6 +72,9 @@ dsh plugin --profile desktop add link:F:\path\to\dsh-computer-use
 | | `type` `key` | Unicode 键入（中文安全）；**`type` 可加 `verify`** 回读校验；`key` 走组合键 `"ctrl+shift+s"` |
 | | `invoke` | 通过 UIA 的 Invoke/Toggle/Select/SetValue 模式驱动控件，不依赖焦点与像素 |
 | 生命周期 | `launch` `kill` `focus` `wait` | 启动进程（可带参数/工作目录）、结束进程、置前、等待 |
+| 跨机执行 | **`targets`** | 列出配置好的远端目标（VMware 虚拟机 / ssh 主机），不联网、不起进程 |
+| | **`exec`** | 在目标里跑一条命令，返回 `exitCode` 与 stdout 尾部（默认上限 8000 字符） |
+| | **`put` / `get`** | 与目标之间传文件（vmrun 走 Tools 复制，ssh 走 stdin/`cat`，二进制安全） |
 | 杂项 | `clipboard` | 读写剪贴板 |
 
 `click`/`move`/`drag` 会**验证注入是否真的落地**：注入后读回光标，偏差超过 2px 就报错并附诊断，而不是假装成功。窗口移动/缩放后坐标失效的问题，用 `relx`/`rely` 解决——它们是相对目标窗口客户区的偏移，引擎每次实时解析成屏幕坐标。
@@ -136,6 +139,53 @@ stopped at step 1 of 2
 - **单次动作一次进程调用**：无常驻服务，卡住也杀得掉，超时默认 30 s。
 - **`snapshot` 与 `find` 的元素 id 是同一套编号**（`0.2.1` 式控制视图路径），所以 `find` 找到控件后可以直接把它的 `id` 喂给 `invoke`，不用再走一遍像素点击。
 - **`dryRun: true`** 只解析 argv、不注入输入、不抢焦点，适合先看它打算干什么。
+
+## 跨机执行：先把另一台机器变成一条命令（token 账）
+
+`targets` / `exec` / `put` / `get` 是 v0.7.0 加的，起因是一次真实任务：在一台 CentOS 7 虚拟机里部署 OpenStack（关服务、改 SELinux、换源、跑 30 分钟的 `packstack`、验证 11 个组件）。如果按像素做，每一步都要「截图 → 看 → 点/打字 → 再截图确认」；实际做法是**用 VMware Tools 把命令送进 guest、把输出取回**，整场部署只拍了 5 张证据图，其余全部是文本往返。
+
+代价对比（同一件事）：
+
+| 做法 | 往返次数 | 进入上下文的内容 |
+| --- | --- | --- |
+| 纯 GUI | 每步 2–3 次（截图 + 点击 + 确认截图） | 每次 1–3k token 的图像理解 |
+| `exec` | 1 次/组命令 | 200–2000 字符的 stdout 尾部 |
+
+配置（`cordis.patch.yml` 的 `config` 里加 `targets`，或插件设置里同样结构的 JSON）：
+
+```yaml
+targets:
+  cloud:                                  # 名字随便起，action 里用它
+    type: vmware
+    vmrun: D:\LINUX666\vmrun.exe          # 不给就用 PATH 里的 vmrun
+    vmx: D:\云计算导论虚拟机2\CentOS 7 64 位.vmx
+    user: root
+    password: "123456"
+    timeoutMs: 180000                     # 单条命令默认预算
+  rhel8:
+    type: ssh
+    host: 10.10.177.222
+    user: root
+    key: C:\Users\you\.ssh\id_ed25519
+```
+
+用法：
+
+```jsonc
+{ "action": "targets" }                                                    // 先看有哪些目标
+{ "action": "exec", "target": "cloud", "command": "systemctl is-active mariadb; rpm -q mariadb" }
+{ "action": "exec", "target": "rhel8", "command": "tail -50 /var/log/messages", "maxChars": 3000 }
+{ "action": "get",  "target": "cloud", "remote": "/root/shot.png", "local": "F:\\out\\shot.png" }
+```
+
+实现与边界：
+
+- **vmware** 后端把一个脚本 `copyFileFromHostToGuest` 进去，用 `runProgramInGuest` 执行「跑脚本 → 重定向到 `.out` → 把 `$?` 写进 `.rc`」，再把两个文件取回。所以拿到的是**guest 里真实的退出码**，不是 `vmrun` 的。
+- **ssh** 后端把命令包成 `bash -lc '…'`（`cwd` 会先 `cd`），`put` 走 `cat > path` 的 stdin，`get` 走 `cat path` 并按二进制读回，PNG 不会被 UTF-8 破坏。
+- stdout 默认只留**尾部** 8000 字符（错误和新提示符都在尾部），被截断时返回 `stdoutChars` 让你知道原来有多长。
+- 凭证写在 profile 配置里，`exec` 以该用户身份运行；它**不受** `blockedProcesses` 约束——那是给本机 GUI 输入用的护栏，跨机命令是另一回事，别把这两件事混在一起。
+- 目前 vmware 后端假设 guest 是 POSIX（`/bin/bash`）。Windows guest 需要 `cmd`/`powershell` 版的包装器，还没做——那种机器仍然走 GUI，或用 guest 里自己开的 ssh。
+- 没有 Tools、也不通 ssh 的虚拟机（比如刚装完没配网络的），`exec` 会直接报错并说明；这时再退回 `targets` 之外的 GUI 动作。
 
 ## 可视化面板：人给模型指路
 
@@ -252,8 +302,11 @@ node test\readtext.mjs
 # 一次调用跑完一份计划：wait → type → key → wait → read（会抢焦点，1.2 秒）
 node test\plan.mjs
 
-# 面板：token、白名单、截图路由、目录外文件拒绝、前缀挂载与宿主挂载（22 项）
+# 面板：token、白名单、截图路由、目录外文件拒绝、前缀挂载与宿主挂载（27 项）
 node test\panel.mjs
+
+# 跨机执行：vmrun/ssh 的 argv、真实退出码、二进制传输、stdout 截断（27 项，纯单测不抢焦点）
+node test\targets.mjs
 
 # 控制台闭环：launch cmd → 打字 → 回车 → 校验命令真的执行了（会抢焦点）
 node test\console.mjs
@@ -262,9 +315,9 @@ node test\console.mjs
 node test\input.mjs
 ```
 
-最近一次全量结果：`71 passed, 0 failed`；`e2e.mjs` 观察链路 OK；`readtext.mjs` 10 项全过（控制台读到 400 字符、`waittext` 109 ms 命中提示符、`--trim` 1440×720 → 483×720 且 PNG 678 KB → 12 KB）；`plan.mjs` 9 项全过（5 步计划一次调用 108 字节 transcript、`done 5/5 in 1.2s`、失败时带上窗口尾部文本）；`panel.mjs` 15 项全过（无 token 401、目录外文件 404、`kill` 403、带面板时插件照常 `info`）；`console.mjs` 七步全过；`input.mjs` 两条闭环都 `MATCH`（`SendInput` 键盘与 UIA `SetValue`/`Invoke` 各自独立验证）。
+最近一次全量结果：`71 passed, 0 failed`；`targets.mjs` 27 项全过（vmrun/ssh argv、guest 真实退出码、二进制 `get` 字节一致、stdout 只留尾部）；`e2e.mjs` 观察链路 OK；`readtext.mjs` 10 项全过（控制台读到 400 字符、`waittext` 109 ms 命中提示符、`--trim` 1440×720 → 483×720 且 PNG 678 KB → 12 KB）；`plan.mjs` 9 项全过（5 步计划一次调用 108 字节 transcript、`done 5/5 in 1.2s`、失败时带上窗口尾部文本）；`panel.mjs` 27 项全过（无 token 401、目录外文件 404、`kill` 403、前缀挂载、客户端 bundle 注册 tab 与 settings section）；`console.mjs` 七步全过；`input.mjs` 两条闭环都 `MATCH`（`SendInput` 键盘与 UIA `SetValue`/`Invoke` 各自独立验证）。
 
-CI（`.github/workflows/ci.yml`，windows-latest）每次 push 会自动跑「编译桥 → 断言 `bin/cu.exe` 存在 → 71 项契约单测」，并把编出来的 `cu.exe` 作为 artifact 上传。它只跑不抢焦点的部分，真机注入脚本 `console.mjs` / `input.mjs` / `plan.mjs` 需要人盯着，不进 CI。
+CI（`.github/workflows/ci.yml`，windows-latest）每次 push 会自动跑「编译桥 → 断言 `bin/cu.exe` 存在 → 71 项契约单测 → 27 项跨机适配单测」，并把编出来的 `cu.exe` 作为 artifact 上传。它只跑不抢焦点的部分，真机注入脚本 `console.mjs` / `input.mjs` / `plan.mjs` 需要人盯着，不进 CI。
 
 `bin/cu.exe` 也可以单独用，方便排查（它自己就是命令行程序，JSON 打到 stdout）：
 
@@ -292,6 +345,7 @@ CI（`.github/workflows/ci.yml`，windows-latest）每次 push 会自动跑「�
 ```text
 dsh-computer-use/
 ├─ lib/index.js          # 插件：手写 JSON Schema 参数 + 安全闸 + argv 映射（零第三方导入）
+├─ lib/targets.js        # 跨机执行：vmrun / ssh 两种后端 + 二进制 put/get
 ├─ lib/panel.js          # 面板请求处理器（宿主挂载 / 回环挂载共用）
 ├─ lib/panel-html.js     # 面板单页（字符串，无构建）
 ├─ lib/client.js         # DSH 客户端标签页（手写 IIFE，右侧栏 iframe）
@@ -299,7 +353,7 @@ dsh-computer-use/
 ├─ bridge/cu.cs          # C# 桥源码（单文件，C# 5 语法，csc.exe 可编）
 ├─ bin/cu.exe            # 编译产物（随仓库提供，装完即用）
 ├─ build.ps1             # 重新编译（-Test 连测试夹具一起编）
-├─ test/                 # 71 项契约单测 + 只读/闭环脚本 + mock + WinForms 夹具
+├─ test/                 # 71 + 27 项单测 + 只读/闭环脚本 + mock + WinForms 夹具
 └─ docs/                 # README 用图
 ```
 

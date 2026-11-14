@@ -34,6 +34,12 @@ jobs:
         shell: pwsh
         run: node test/run-tests.mjs
 
+      # The cross-machine adapters are pure argv/IO logic with an injected
+      # runner, so they need neither a GUI nor a real vmrun/ssh.
+      - name: Cross-machine adapter tests
+        shell: pwsh
+        run: node test/targets.mjs
+
       - name: Upload build output
         uses: actions/upload-artifact@v4
         with:

@@ -18,6 +18,8 @@
 #   timeoutMs                  - per-engine-call ceiling (default 30000)
 #   panelPort                  - serve the human-in-the-loop browser panel on
 #                                this loopback port (default off; false = off)
+#   targets                    - remote machines the `exec` / `put` / `get`
+#                                actions can reach (off by default; see below)
 # ============================================================================
 
 - insert:
@@ -36,3 +38,22 @@
         # <artifactsDir>/panel.json>. Loopback only, token required, and it can
         # only click/type/invoke - never kill or launch.
         panelPort: 7333
+        # Remote targets for the `exec` / `put` / `get` actions. Nothing is
+        # reachable until you add an entry here; credentials stay in this file.
+        # Uncomment and edit to use it:
+        #
+        # targets:
+        #   # A VMware Workstation guest - needs VMware Tools (no network needed).
+        #   cloud:
+        #     type: vmware
+        #     vmrun: D:\LINUX666\vmrun.exe
+        #     vmx: D:\云计算导论虚拟机2\CentOS 7 64 位.vmx
+        #     user: root
+        #     password: "123456"
+        #     timeoutMs: 180000
+        #   # Any reachable POSIX host with sshd.
+        #   rhel8:
+        #     type: ssh
+        #     host: 10.10.177.222
+        #     user: root
+        #     key: C:\Users\you\.ssh\id_ed25519
