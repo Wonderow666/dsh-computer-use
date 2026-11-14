@@ -16,6 +16,8 @@
 #                                a whole monitor (default false)
 #   allowProcessControl        - allow launch/kill actions (default true)
 #   timeoutMs                  - per-engine-call ceiling (default 30000)
+#   panelPort                  - serve the human-in-the-loop browser panel on
+#                                this loopback port (default off; false = off)
 # ============================================================================
 
 - insert:
@@ -30,3 +32,7 @@
         refuseFullscreenForeground: false
         allowProcessControl: true
         timeoutMs: 30000
+        # Human-in-the-loop panel: http://127.0.0.1:7333/?t=<token from
+        # <artifactsDir>/panel.json>. Loopback only, token required, and it can
+        # only click/type/invoke - never kill or launch.
+        panelPort: 7333

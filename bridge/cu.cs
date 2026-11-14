@@ -2314,6 +2314,19 @@ static class Program
                 if (p.MainWindowHandle != IntPtr.Zero) { hwnd = p.MainWindowHandle.ToInt64(); title = p.MainWindowTitle; break; }
                 Thread.Sleep(100); waited += 100;
             }
+            // Console hosts (conhost / Windows Terminal) do not always surface a
+            // MainWindowHandle for the launched process even though a window is
+            // clearly on screen, so fall back to our own top-level enumeration.
+            if (hwnd == 0)
+            {
+                Dictionary<int, IntPtr> wins = MainWindows();
+                IntPtr h;
+                if (wins.TryGetValue(pid, out h) && h != IntPtr.Zero)
+                {
+                    hwnd = h.ToInt64();
+                    title = WindowTitle(h);
+                }
+            }
         }
         Emit("{\"ok\":true,\"path\":" + J.S(path) + ",\"pid\":" + pid + ",\"hwnd\":" + hwnd + ",\"title\":" + J.S(title) + "}");
     }

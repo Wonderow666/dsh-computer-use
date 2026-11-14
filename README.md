@@ -137,6 +137,29 @@ stopped at step 1 of 2
 - **`snapshot` 与 `find` 的元素 id 是同一套编号**（`0.2.1` 式控制视图路径），所以 `find` 找到控件后可以直接把它的 `id` 喂给 `invoke`，不用再走一遍像素点击。
 - **`dryRun: true`** 只解析 argv、不注入输入、不抢焦点，适合先看它打算干什么。
 
+## 浏览器面板：人给模型指路
+
+模型不需要"看着屏幕操作"，但**人需要看着屏幕给模型指路**。v0.5.0 加了一个只绑回环地址的小面板：按需截图 → 点一下查这个点是什么控件 → 控件清单 → 动作日志。
+
+```yaml
+# profile 的 cordis.patch.yml（或 dsh-computer-use 的插件配置）
+config:
+  panelPort: 7333        # 固定端口；DSH_COMPUTER_USE_PANEL=1 则随机端口
+```
+
+插件启动后会把地址和 token 写进 `<artifactsDir>/panel.json`（默认 `%TEMP%\dsh-computer`），同时在 stderr 打印一次：
+
+```
+[dsh-computer-use] panel: http://127.0.0.1:7333/?t=2f9c…
+```
+
+- **鉴权**：`?t=<token>` 或 `x-panel-token` 头，缺了就是 401；默认只绑 `127.0.0.1`。
+- **动作白名单**：面板只能 `click` / `invoke` / `type` / `key` / `focus` / `scroll` / `hover`，`kill`、`launch` 之类一律 403——浏览器里的一次误点不该能关掉你的程序。
+- **同一个安全闸**：面板调用的是模型的 `computer` 执行器本身，所以 `blockedProcesses`、前台护栏、LOW 完整性提示全部照旧生效。
+- **不是实时镜像**：默认不截图、不推送画面，只有在你看的时候才抓一张（另有一个 3 秒自动刷新开关，默认关）。实时镜子会把人重新带回"用像素看世界"，而那正是这个插件想省掉的开销。
+
+面板的价值不只是"能点"：它顺手给出**稳定的选择器**（`role` + `name` + `automationId` + `id` 路径），这些正是将来写进 `profile` 文件、让下一次任务不必再试探的东西。
+
 ## 安全边界
 
 1. `blockedProcesses`：目标窗口的进程名/窗口类/标题命中任一字符串就拒绝注入输入。**默认已填 `TslGame.exe` / `UnrealWindow`**（PUBG），也就是永远不会往游戏窗口里打字或点击；想操作别的游戏就往这个数组里加。只读动作不受影响。
@@ -219,6 +242,9 @@ node test\readtext.mjs
 # 一次调用跑完一份计划：wait → type → key → wait → read（会抢焦点，1.2 秒）
 node test\plan.mjs
 
+# 浏览器面板：token、白名单、截图路由、目录外文件拒绝，以及带面板启动时插件仍可用（15 项）
+node test\panel.mjs
+
 # 控制台闭环：launch cmd → 打字 → 回车 → 校验命令真的执行了（会抢焦点）
 node test\console.mjs
 
@@ -226,9 +252,9 @@ node test\console.mjs
 node test\input.mjs
 ```
 
-最近一次全量结果：`71 passed, 0 failed`；`e2e.mjs` 观察链路 OK；`readtext.mjs` 10 项全过（控制台读到 400 字符、`waittext` 109 ms 命中提示符、`--trim` 1440×720 → 483×720 且 PNG 678 KB → 12 KB）；`plan.mjs` 9 项全过（5 步计划一次调用 108 字节 transcript、`done 5/5 in 1.2s`、失败时带上窗口尾部文本）；`console.mjs` 七步全过；`input.mjs` 两条闭环都 `MATCH`（`SendInput` 键盘与 UIA `SetValue`/`Invoke` 各自独立验证）。
+最近一次全量结果：`71 passed, 0 failed`；`e2e.mjs` 观察链路 OK；`readtext.mjs` 10 项全过（控制台读到 400 字符、`waittext` 109 ms 命中提示符、`--trim` 1440×720 → 483×720 且 PNG 678 KB → 12 KB）；`plan.mjs` 9 项全过（5 步计划一次调用 108 字节 transcript、`done 5/5 in 1.2s`、失败时带上窗口尾部文本）；`panel.mjs` 15 项全过（无 token 401、目录外文件 404、`kill` 403、带面板时插件照常 `info`）；`console.mjs` 七步全过；`input.mjs` 两条闭环都 `MATCH`（`SendInput` 键盘与 UIA `SetValue`/`Invoke` 各自独立验证）。
 
-CI（`.github/workflows/ci.yml`，windows-latest）每次 push 会自动跑「编译桥 → 断言 `bin/cu.exe` 存在 → 61 项契约单测」，并把编出来的 `cu.exe` 作为 artifact 上传。它只跑不抢焦点的部分，真机注入脚本 `console.mjs` / `input.mjs` 需要人盯着，不进 CI。
+CI（`.github/workflows/ci.yml`，windows-latest）每次 push 会自动跑「编译桥 → 断言 `bin/cu.exe` 存在 → 71 项契约单测」，并把编出来的 `cu.exe` 作为 artifact 上传。它只跑不抢焦点的部分，真机注入脚本 `console.mjs` / `input.mjs` / `plan.mjs` 需要人盯着，不进 CI。
 
 `bin/cu.exe` 也可以单独用，方便排查（它自己就是命令行程序，JSON 打到 stdout）：
 
