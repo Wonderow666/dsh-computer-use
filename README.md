@@ -137,23 +137,28 @@ stopped at step 1 of 2
 - **`snapshot` 与 `find` 的元素 id 是同一套编号**（`0.2.1` 式控制视图路径），所以 `find` 找到控件后可以直接把它的 `id` 喂给 `invoke`，不用再走一遍像素点击。
 - **`dryRun: true`** 只解析 argv、不注入输入、不抢焦点，适合先看它打算干什么。
 
-## 浏览器面板：人给模型指路
+## 可视化面板：人给模型指路
 
-模型不需要"看着屏幕操作"，但**人需要看着屏幕给模型指路**。v0.5.0 加了一个只绑回环地址的小面板：按需截图 → 点一下查这个点是什么控件 → 控件清单 → 动作日志。
+模型不需要"看着屏幕操作"，但**人需要看着屏幕给模型指路**。面板做四件事：按需截图 → 点一下查这个点是什么控件 → 列出可操作控件 → 记动作日志。
+
+v0.6.0 起面板有两个挂载点，共用同一个请求处理器：
+
+1. **DSH 自己的 Web 服务**（默认）：挂在 `/computer-use/panel`，与 DSH 页面同源，用 DSH 会话 Cookie 鉴权——不需要 token、不需要 CORS。右侧栏会多出一个「电脑操作面板」标签页，里面是同源 iframe。
+2. **回环端口 + 随机 token**（可选）：想用普通浏览器窗口看时用。
 
 ```yaml
 # profile 的 cordis.patch.yml（或 dsh-computer-use 的插件配置）
 config:
-  panelPort: 7333        # 固定端口；DSH_COMPUTER_USE_PANEL=1 则随机端口
+  panelPort: 7333        # 可选的回环副本；DSH_COMPUTER_USE_PANEL=1 则随机端口
 ```
 
-插件启动后会把地址和 token 写进 `<artifactsDir>/panel.json`（默认 `%TEMP%\dsh-computer`），同时在 stderr 打印一次：
+客户端标签页来自 `lib/client.js`（`dsh.client` + `exports["./client"]`），**需要重启 DSH 才会装载**；回环副本启动后会把地址和 token 写进 `<artifactsDir>/panel.json`（默认 `%TEMP%\dsh-computer`），同时在 stderr 打印一次：
 
 ```
 [dsh-computer-use] panel: http://127.0.0.1:7333/?t=2f9c…
 ```
 
-- **鉴权**：`?t=<token>` 或 `x-panel-token` 头，缺了就是 401；默认只绑 `127.0.0.1`。
+- **鉴权**：DSH 内挂载靠会话 Cookie；回环副本靠 `?t=<token>` 或 `x-panel-token` 头，缺了就是 401，且默认只绑 `127.0.0.1`。
 - **动作白名单**：面板只能 `click` / `invoke` / `type` / `key` / `focus` / `scroll` / `hover`，`kill`、`launch` 之类一律 403——浏览器里的一次误点不该能关掉你的程序。
 - **同一个安全闸**：面板调用的是模型的 `computer` 执行器本身，所以 `blockedProcesses`、前台护栏、LOW 完整性提示全部照旧生效。
 - **不是实时镜像**：默认不截图、不推送画面，只有在你看的时候才抓一张（另有一个 3 秒自动刷新开关，默认关）。实时镜子会把人重新带回"用像素看世界"，而那正是这个插件想省掉的开销。
@@ -242,7 +247,7 @@ node test\readtext.mjs
 # 一次调用跑完一份计划：wait → type → key → wait → read（会抢焦点，1.2 秒）
 node test\plan.mjs
 
-# 浏览器面板：token、白名单、截图路由、目录外文件拒绝，以及带面板启动时插件仍可用（15 项）
+# 面板：token、白名单、截图路由、目录外文件拒绝、前缀挂载与宿主挂载（22 项）
 node test\panel.mjs
 
 # 控制台闭环：launch cmd → 打字 → 回车 → 校验命令真的执行了（会抢焦点）
@@ -282,11 +287,14 @@ CI（`.github/workflows/ci.yml`，windows-latest）每次 push 会自动跑「�
 ```text
 dsh-computer-use/
 ├─ lib/index.js          # 插件：手写 JSON Schema 参数 + 安全闸 + argv 映射（零第三方导入）
+├─ lib/panel.js          # 面板请求处理器（宿主挂载 / 回环挂载共用）
+├─ lib/panel-html.js     # 面板单页（字符串，无构建）
+├─ lib/client.js         # DSH 客户端标签页（手写 IIFE，右侧栏 iframe）
 ├─ cordis.patch.yml      # bundle patch + 默认配置
 ├─ bridge/cu.cs          # C# 桥源码（单文件，C# 5 语法，csc.exe 可编）
 ├─ bin/cu.exe            # 编译产物（随仓库提供，装完即用）
 ├─ build.ps1             # 重新编译（-Test 连测试夹具一起编）
-├─ test/                 # 49 项单测 + 三个真机闭环脚本 + mock + WinForms 夹具
+├─ test/                 # 71 项契约单测 + 只读/闭环脚本 + mock + WinForms 夹具
 └─ docs/                 # README 用图
 ```
 

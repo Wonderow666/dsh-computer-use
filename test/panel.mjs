@@ -6,8 +6,9 @@
 // half boots the real plugin with panelPort and asks its live endpoint for the
 // desktop state, which proves the wiring end to end.
 import { loadTool, ARTIFACTS } from "./_harness.mjs";
-import { startPanel } from "../lib/panel.js";
+import { startPanel, createPanelHandler } from "../lib/panel.js";
 import fs from "node:fs";
+import http from "node:http";
 import path from "node:path";
 
 const results = [];
@@ -109,6 +110,76 @@ if (published) {
   const liveState = await live.json();
   check("the live panel answers with real desktop state", live.status === 200 && liveState.ok === true && Boolean(liveState.foreground), `locked=${liveState.locked}`);
 }
+
+// The same handler mounts on DSH's own web server under a prefix: the client
+// tab frames it same-origin, so the page must carry that prefix in every fetch
+// and the API must answer under it too.
+const mounted = http.createServer((req, res) => {
+  createPanelHandler({ exec: fakeExec, artifactsDir: ARTIFACTS, prefix: "/computer-use/panel" }).handler(req, res);
+});
+await new Promise((resolve) => mounted.listen(0, "127.0.0.1", resolve));
+const mountPort = mounted.address().port;
+const mountBase = `http://127.0.0.1:${mountPort}/computer-use/panel`;
+const mountPage = await fetch(`${mountBase}/`);
+const mountHtml = await mountPage.text();
+check("the prefixed mount serves the page without a token", mountPage.status === 200 && mountHtml.includes("/api/hit"));
+check("the prefixed page bakes the mount prefix into its fetches", mountHtml.includes('const base = "/computer-use/panel"'));
+const mountState = await fetch(`${mountBase}/api/state`);
+const mountStateJson = await mountState.json();
+check("the prefixed mount answers the API", mountState.status === 200 && mountStateJson.ok === true);
+const mountOff = await fetch(`http://127.0.0.1:${mountPort}/api/state`);
+check("the prefixed mount refuses paths outside its prefix", mountOff.status === 404, `status ${mountOff.status}`);
+mounted.closeAllConnections?.();
+await new Promise((resolve) => mounted.close(resolve));
+
+// The real plugin must mount the panel on the host web server, with the prefix
+// the client tab frames.
+const plugin = await import("../lib/index.js");
+const mounts = [];
+const hostCtx = {
+  tools: { register: () => {} },
+  webServer: { register: (route) => { mounts.push(route); return () => {}; } },
+  effect: (fn) => { const off = fn(); return () => { if (typeof off === "function") off(); }; }
+};
+plugin.apply(hostCtx, { enabled: true, panelPort: false, artifactsDir: path.join(ARTIFACTS, "e2e") });
+check("the plugin mounts the panel on the host web server", mounts.length === 1 && mounts[0].path === "/computer-use/panel" && mounts[0].kind === "prefix", mounts.map((m) => `${m.kind} ${m.path}`).join(", "));
+const host = http.createServer((req, res) => mounts[0].handler(req, res));
+await new Promise((resolve) => host.listen(0, "127.0.0.1", resolve));
+const hostPort = host.address().port;
+const hostPage = await fetch(`http://127.0.0.1:${hostPort}/computer-use/panel/`);
+const hostHtml = await hostPage.text();
+check("the host mount serves the framed page", hostPage.status === 200 && hostHtml.includes('const base = "/computer-use/panel"'));
+await fetch(`http://127.0.0.1:${hostPort}/computer-use/panel/api/state`).then((r) => r.json()).then(
+  (s) => check("the host mount reaches the real desktop", s.ok === true && Boolean(s.foreground), `locked=${s.locked}`),
+  (e) => check("the host mount reaches the real desktop", false, String(e && e.message))
+);
+host.closeAllConnections?.();
+await new Promise((resolve) => host.close(resolve));
+
+// The client bundle: run it the way DSH's loader does, then check it declares
+// the services it needs and registers one tab type plus its body.
+let bundle = null;
+globalThis.window = { __ModuleLoader__: { load: (def) => { bundle = def; } } };
+const fakeReact = { createElement: (type, props) => ({ type, props }), useState: (v) => [v, () => {}] };
+await import("../lib/client.js");
+const client = bundle.factory((name) => {
+  if (name === "react") return fakeReact;
+  throw new Error(`unexpected require: ${name}`);
+});
+const tabCalls = [];
+const seatCalls = [];
+const effects = [];
+client.apply({
+  effect: (fn) => { effects.push(fn); },
+  sidebarRightTabs: { register: (def) => { tabCalls.push(def); return () => {}; } },
+  slots: { register: (seat) => { seatCalls.push(seat); return () => {}; } }
+});
+for (const fn of effects) fn();
+check("the client declares the services it injects", Array.isArray(client.inject) && client.inject.includes("sidebarRightTabs") && client.inject.includes("slots"), client.inject.join(", "));
+check("the client registers one sidebar tab type", tabCalls.length === 1 && tabCalls[0].id === "dsh-computer-use/panel" && tabCalls[0].kind === "computer-use-panel", tabCalls.map((t) => t.kind).join(","));
+check("the client registers the tab body under the same key", seatCalls.length === 1 && seatCalls[0].name === "sidebar.right.pane.tab" && seatCalls[0].key === "dsh-computer-use/panel", seatCalls.map((s) => s.name).join(","));
+const body = client.PanelBody();
+check("the tab body frames the host-mounted panel", body && body.props && body.props.src === "/computer-use/panel/", body && body.props && body.props.src);
 
 const failed = results.filter((r) => !r.ok).length;
 console.log(`\n${results.length - failed} passed, ${failed} failed`);
