@@ -152,7 +152,12 @@ config:
   panelPort: 7333        # 可选的回环副本；DSH_COMPUTER_USE_PANEL=1 则随机端口
 ```
 
-客户端标签页来自 `lib/client.js`（`dsh.client` + `exports["./client"]`），**需要重启 DSH 才会装载**；回环副本启动后会把地址和 token 写进 `<artifactsDir>/panel.json`（默认 `%TEMP%\dsh-computer`），同时在 stderr 打印一次：
+客户端标签页来自 `lib/client.js`（`dsh.client` + `exports["./client"]`），**需要重启 DSH 才会装载**。重启后有两个入口：
+
+1. **设置 → 电脑操作面板** → 点「在右侧栏打开面板」（这条最稳，每个注册的 settings section 都会列出来）；
+2. 右侧栏（对话头部那个分栏图标）→ 标签栏的「+」→「电脑操作面板」。
+
+启动时插件会写一份挂载诊断到 `<artifactsDir>/panel-diag.json`（`mounted: true` 表示已挂到 DSH 自己的 Web 服务上）；回环副本还会把地址和 token 写进 `<artifactsDir>/panel.json`（默认 `%TEMP%\dsh-computer`），同时在 stderr 打印一次：
 
 ```
 [dsh-computer-use] panel: http://127.0.0.1:7333/?t=2f9c…

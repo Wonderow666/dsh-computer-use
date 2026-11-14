@@ -172,14 +172,19 @@ const effects = [];
 client.apply({
   effect: (fn) => { effects.push(fn); },
   sidebarRightTabs: { register: (def) => { tabCalls.push(def); return () => {}; } },
-  slots: { register: (seat) => { seatCalls.push(seat); return () => {}; } }
+  slots: {
+    register: (seat) => { seatCalls.push(seat); return () => {}; },
+    inject: (name, fn) => { fn(); return () => {}; }
+  }
 });
 for (const fn of effects) fn();
 check("the client declares the services it injects", Array.isArray(client.inject) && client.inject.includes("sidebarRightTabs") && client.inject.includes("slots"), client.inject.join(", "));
 check("the client registers one sidebar tab type", tabCalls.length === 1 && tabCalls[0].id === "dsh-computer-use/panel" && tabCalls[0].kind === "computer-use-panel", tabCalls.map((t) => t.kind).join(","));
-check("the client registers the tab body under the same key", seatCalls.length === 1 && seatCalls[0].name === "sidebar.right.pane.tab" && seatCalls[0].key === "dsh-computer-use/panel", seatCalls.map((s) => s.name).join(","));
+check("the client registers the tab body under the same key", seatCalls.some((s) => s.name === "sidebar.right.pane.tab" && s.key === "dsh-computer-use/panel"), seatCalls.map((s) => s.name).join(","));
 const body = client.PanelBody();
 check("the tab body frames the host-mounted panel", body && body.props && body.props.src === "/computer-use/panel/", body && body.props && body.props.src);
+const settingsCalls = seatCalls.filter((s) => s.name === "settings.section");
+check("the client also registers a settings section", settingsCalls.length === 1 && settingsCalls[0].id === "dsh-computer-use-panel", settingsCalls.map((s) => s.id).join(","));
 
 const failed = results.filter((r) => !r.ok).length;
 console.log(`\n${results.length - failed} passed, ${failed} failed`);
