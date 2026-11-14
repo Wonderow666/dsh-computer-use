@@ -34,7 +34,33 @@ function opt(argv) {
 function payload(cmd, o) {
   switch (cmd) {
     case "info":
-      return { ok: true, screenW: 2560, screenH: 1600, virtualX: 0, virtualY: 0, cursor: { x: 800, y: 600 }, monitors: state.monitors, foreground: state.foreground };
+      return {
+        ok: true, screenW: 2560, screenH: 1600, virtualX: 0, virtualY: 0,
+        cursor: { x: 800, y: 600 }, monitors: state.monitors, foreground: state.foreground,
+        locked: false, lockAppRunning: false, inputDesktopName: "Default",
+        privileged: true, uiRestrictions: 0
+      };
+    case "ui":
+      return {
+        ok: true, count: 2, scanned: 9, truncated: false,
+        root: state.foreground,
+        items: [
+          { id: "0.1.0", role: "Button", name: "Save", rect: { x: 10, y: 20, w: 80, h: 24 } },
+          { id: "0.1.1", role: "Edit", name: "Name", value: "hello", rect: { x: 10, y: 60, w: 200, h: 24 } }
+        ]
+      };
+    case "modals":
+      return { ok: true, count: 0, items: [] };
+    case "geom": {
+      const w = state.windows.find((x) => String(x.hwnd) === String(o.hwnd)) || state.foreground;
+      return {
+        ok: true, hwnd: w.hwnd, title: w.title, class: w.class, pid: w.pid,
+        rect: w.rect,
+        client: { x: 0, y: 0, w: w.rect.w, h: w.rect.h - 39 },
+        clientOrigin: { x: w.rect.x, y: w.rect.y + 39 },
+        dpi: 144, scale: 1.5, maximized: false, minimized: false, monitors: state.monitors
+      };
+    }
     case "windows":
       return { ok: true, count: state.windows.length, foreground: state.foreground, windows: state.windows };
     case "shot":

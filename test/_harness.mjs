@@ -19,7 +19,13 @@ export async function loadTool(config = {}) {
     ...config,
   });
   const tool = defs[0];
-  const run = async (args) => JSON.parse((await tool.execute(args, {})).text);
+  // Most actions answer with a JSON blob; `run` intentionally answers with a
+  // plain-text transcript (that is the whole point of it), so fall back to the
+  // raw string instead of pretending everything is JSON.
+  const run = async (args) => {
+    const text = (await tool.execute(args, {})).text;
+    try { return JSON.parse(text); } catch { return { text }; }
+  };
   return { mod, tool, run };
 }
 

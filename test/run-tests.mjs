@@ -313,6 +313,47 @@ console.log("\n[readtext / waittext / trim / verify]");
   cp.state.typeVerify = null;
 }
 
+console.log("\n[state / ui / run]");
+{
+  const t = boot({});
+  const st = text(await t.execute({ action: "state" }, {}));
+  check("state folds lock and foreground into one answer", () => {
+    eq(st.locked, false);
+    eq(st.foreground.hwnd, 656368);
+  });
+  const st2 = text(await t.execute({ action: "state", hwnd: "656368" }, {}));
+  check("state adds the target geometry when a target is given", () => eq(st2.target.hwnd, 656368));
+
+  const ui = text(await t.execute({ action: "ui", hwnd: "656368", max: 12 }, {}));
+  check("ui forwards hwnd and max", () => {
+    const a = callOf("ui")[0].argv;
+    eq(a[a.indexOf("--hwnd") + 1], "656368");
+    eq(a[a.indexOf("--max") + 1], "12");
+    eq(ui.count, 2);
+  });
+
+  const plan = "wait /ok/ 900\ntype hello\nkey enter\nread";
+  const ran = await t.execute({ action: "run", hwnd: "999001", plan }, {});
+  check("run executes a whole plan in one call", () => /done 4\/4/.test(ran.text));
+  check("run transcript is one line per step plus a summary", () => eq(ran.text.trim().split(/\r?\n/).length, 5));
+  check("run raises the target before typing", () => {
+    const order = cp.calls.filter((c) => ["focus", "type", "key"].includes(c.argv[0])).map((c) => c.argv[0]);
+    eq(order[0], "focus");
+  });
+  check("run does not screenshot unless the plan asks", () => eq(cp.calls.filter((c) => c.argv[0] === "shot").length, 0));
+
+  await assert.rejects(() => t.execute({ action: "run", hwnd: "656368", plan: "fly away" }, {}), /unknown step/);
+  check("run rejects an unknown step", () => {});
+  await assert.rejects(() => t.execute({ action: "run" }, {}), /needs `plan`/);
+  check("run rejects an empty plan", () => {});
+
+  const plans = path.join(ROOT, "artifacts", "unit", "plan-input.txt");
+  fs.mkdirSync(path.dirname(plans), { recursive: true });
+  fs.writeFileSync(plans, "wait /ok/ 900\nread\n", "utf8");
+  const fromFile = await t.execute({ action: "run", hwnd: "656368", file: plans }, {});
+  check("run can read the plan from a file", () => /done 2\/2/.test(fromFile.text));
+}
+
 console.log("\n[engine failure]");
 {
   const t = boot({ timeoutMs: 5000 });

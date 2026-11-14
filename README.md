@@ -1,4 +1,4 @@
-﻿# dsh-computer-use
+# dsh-computer-use
 
 [![CI](https://github.com/Wonderow666/dsh-computer-use/actions/workflows/ci.yml/badge.svg)](https://github.com/Wonderow666/dsh-computer-use/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/Wonderow666/dsh-computer-use/blob/main/LICENSE)
@@ -50,21 +50,24 @@ dsh plugin --profile desktop add link:F:\path\to\dsh-computer-use
 
 重启后模型侧多出一个 `computer` 工具。插件配置在 `cordis.patch.yml`（`blockedProcesses`、`refuseFullscreenForeground`、`allowProcessControl`、`timeoutMs`、`enginePath`、`artifactsDir`），profile 自己的 `cordis.patch.yml` 可以按 id 覆盖这些字段。
 
-## 工具面（单一 `computer`，27 个 action）
+## 工具面（单一 `computer`，30 个 action）
 
 | 类别 | action | 返回 |
 | --- | --- | --- |
 | 预检 | `inputcheck` | 移动光标再复位，回报 `landed`/`integrity`/`locked`/`pointerDrifting` 与一句结论。**动手前先跑它** |
+| | **`state`** | 一次调用给出“我现在能不能动手”：`locked`/`lockAppRunning`/`privileged`/`foreground`/目标窗口 `geom`/**该应用的模态框计数**（实测 351–547 字节） |
 | 观察 | `info` | 屏幕/虚拟桌面尺寸、每台显示器 dpi 与缩放、光标、前台窗口、`locked`、输入桌面名 |
 | | `windows` / `procs` | 顶层窗口（hwnd/title/class/process/pid/rect/foreground）或进程列表 |
+| | **`ui`** | **紧凑控件清单**：只列可操作控件（按钮/输入框/下拉/菜单/列表…）与短文本，带 `value`，默认 60 条上限。同一窗口比 `snapshot` 小 5–7 倍 |
 | | `screenshot` | PNG 路径 + `srcW/srcH/w/h/scale`，默认缩到 1600 宽；支持 `region` 裁剪、**`trim`（按内容裁剪）** 与 **`minBytes`（拒绝空白图）** |
-| | `snapshot` | UI Automation 控制树，元素 id 形如 `0.2.1`，带类型与矩形 |
+| | `snapshot` | UI Automation 控制树，元素 id 形如 `0.2.1`，带类型与矩形（**只在需要结构/父级关系时才用**） |
 | | `find` / `hit` | 按名称找控件 / 查某坐标下是什么窗口与控件 |
 | | `geom` | 窗口矩形 + **客户区原点** + dpi，几何断言的唯一来源 |
-| | `modals` | 枚举 `#32770` 对话框、带 owner 的弹窗、被禁用的顶层窗口（“输入被吞”的第一嫌疑人） |
+| | `modals` | 枚举可见的 `#32770` 对话框、带 owner 的弹窗、被禁用的顶层窗口（“输入被吞”的第一嫌疑人） |
 | | `hover` | 移到目标控件驻留后读 UIA 的 name/helpText/acceleratorKey 与 `tooltips_class32` 文本 |
 | | **`readtext`** | 把窗口的文字读回来（UIA Text/Value → win32 `WM_GETTEXT` 兜底），返回 `text`/`strategy`/`sources` |
 | | **`waittext`** | 轮询 `readtext` 直到正则命中，返回 `matched`/`waitedMs`/`text`；超时给出已读到的尾部文本 |
+| 批量 | **`run`** | **一次调用执行整份计划**（`wait`/`type`/`key`/`click`/`clickrel`/`invoke`/`read`/`shot`），只回每步一行 transcript；输入前自动置前 |
 | 输入 | `click` `move` `scroll` `drag` | SendInput 注入，物理像素坐标；支持 `hwnd`/`title` 定位与 **`relx`/`rely`（客户区相对坐标）** |
 | | `type` `key` | Unicode 键入（中文安全）；**`type` 可加 `verify`** 回读校验；`key` 走组合键 `"ctrl+shift+s"` |
 | | `invoke` | 通过 UIA 的 Invoke/Toggle/Select/SetValue 模式驱动控件，不依赖焦点与像素 |
@@ -85,6 +88,36 @@ dsh plugin --profile desktop add link:F:\path\to\dsh-computer-use
 限制也写清楚：Chromium 系窗口默认不暴露渲染内容（需要 `--force-renderer-accessibility`），此时 `readtext` 会诚实地返回 `none` 而不是编造文本；`--trim` 只在背景比较单色时有效，照片壁纸背景会被判成"全是内容"从而不裁。
 
 - `screenshot --minBytes 15000`：**证据类截图的体检**。屏幕熄灭、窗口被遮住、整帧全黑时，PNG 会压到几 KB——看起来"拍成功了"，插进报告才发现是白图。给了下限就直接报错：`the screenshot is only 5708 bytes (< --min-bytes 15000), so it is blank or the window was not visible`。返回体里恒有 `bytes` 字段，可以自己判。
+
+### 为什么要有 `state` / `ui` / `run`（token 账）
+
+前四个版本的能力都在引擎层，但**每次交互仍然是模型自己一步步试探**：点一下、截个图看有没有反应、再点一下。真正烧 token 的不是引擎，是"每走一步都要重新看清世界"这个循环。v0.4.0 把三件最贵的动作变成工具语义：
+
+| 你想知道 | 以前 | 现在 | 实测 |
+| --- | --- | --- | --- |
+| 现在能不能动手 | `info` + `inputcheck` + 自己判断 | `state` | **351–547 字节**，一次调用带 `locked`/`lockAppRunning`/`privileged`/前台/目标几何/该应用的模态框 |
+| 这个窗口能点什么 | `snapshot`（全树） | `ui` | 同一窗口 **3946 字节 vs 26390 字节**（≈7 倍），且只列可操作控件 |
+| 这五步操作对不对 | 5 次调用 + 中间 2 张截图 | `run` | 5 步 **108 字节** transcript，`done 5/5 in 1.2s` |
+
+`run` 的计划语法是一行一步，注释用 `#`：
+
+```
+wait /[$#>]\s*$/ 8000     # 等提示符，带超时
+type echo hi > out.txt    # Unicode 键入
+key enter
+wait /hi/ 4000            # 等命令结果
+read                      # 读回来（几百 token，替代截图）
+shot                      # 只有真需要证据时才拍
+```
+
+每一步自己声明"什么算成功"，因此**不需要额外截图来相信它**：成功就 `3 key enter`，失败就
+
+```
+1 wait FAILED after 1125ms: text did not match /definitely-not-on-screen/ within 996ms (strategy uia, 720 chars read) | last text: "…F:\…>"
+stopped at step 1 of 2
+```
+
+——失败时把窗口当时的尾部文本一起带回来，通常这一行就够定位，不用再截一张图。输入类步骤执行前会自动 `focus` 目标窗口（引擎的"不在前台就拒发"护栏因此变成"自动置前后再发"，而不是一个必须人工处理的错误）。
 
 一次典型调用看起来是这样（模型侧）：
 
@@ -174,7 +207,7 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1
 # 连测试夹具一起编（test/target/target.exe，供 input.mjs 用）
 powershell -ExecutionPolicy Bypass -File .\build.ps1 -Test
 
-# 插件契约单测：mock 掉引擎，校验 argv 映射/窗口解析/安全闸/干跑/长文本落盘（61 项）
+# 插件契约单测：mock 掉引擎，校验 argv 映射/窗口解析/安全闸/干跑/长文本落盘（71 项）
 node test\run-tests.mjs
 
 # 真机观察链路：真插件 + 真 spawn + 真 cu.exe，只读不注入
@@ -183,6 +216,9 @@ node test\e2e.mjs
 # 文本通道与裁剪：launch cmd → readtext → waittext → trim（只读，不抢焦点）
 node test\readtext.mjs
 
+# 一次调用跑完一份计划：wait → type → key → wait → read（会抢焦点，1.2 秒）
+node test\plan.mjs
+
 # 控制台闭环：launch cmd → 打字 → 回车 → 校验命令真的执行了（会抢焦点）
 node test\console.mjs
 
@@ -190,7 +226,7 @@ node test\console.mjs
 node test\input.mjs
 ```
 
-最近一次全量结果：`61 passed, 0 failed`；`e2e.mjs` 观察链路 OK；`readtext.mjs` 10 项全过（控制台读到 400 字符、`waittext` 109 ms 命中提示符、`--trim` 1440×720 → 483×720 且 PNG 678 KB → 12 KB）；`console.mjs` 七步全过；`input.mjs` 两条闭环都 `MATCH`（`SendInput` 键盘与 UIA `SetValue`/`Invoke` 各自独立验证）。
+最近一次全量结果：`71 passed, 0 failed`；`e2e.mjs` 观察链路 OK；`readtext.mjs` 10 项全过（控制台读到 400 字符、`waittext` 109 ms 命中提示符、`--trim` 1440×720 → 483×720 且 PNG 678 KB → 12 KB）；`plan.mjs` 9 项全过（5 步计划一次调用 108 字节 transcript、`done 5/5 in 1.2s`、失败时带上窗口尾部文本）；`console.mjs` 七步全过；`input.mjs` 两条闭环都 `MATCH`（`SendInput` 键盘与 UIA `SetValue`/`Invoke` 各自独立验证）。
 
 CI（`.github/workflows/ci.yml`，windows-latest）每次 push 会自动跑「编译桥 → 断言 `bin/cu.exe` 存在 → 61 项契约单测」，并把编出来的 `cu.exe` 作为 artifact 上传。它只跑不抢焦点的部分，真机注入脚本 `console.mjs` / `input.mjs` 需要人盯着，不进 CI。
 

@@ -252,6 +252,7 @@ static class Program
                 case "windows": Windows(c); break;
                 case "shot": Shot(c); break;
                 case "tree": Tree(c); break;
+                case "ui": Ui(c); break;
                 case "find": Find(c); break;
                 case "hit": Hit(c); break;
             case "inputcheck": InputCheck(); break;
@@ -318,6 +319,7 @@ static class Program
 "  readtext [--hwnd H] [--chars N]   read the window's text back (UIA text/value, else win32)\n" +
 "  waittext --regex R [--hwnd H] [--timeout MS]   poll readtext until the text matches\n" +
 "  tree [--hwnd H] [--depth N] [--max N]   UI Automation control-view tree with element ids\n" +
+"  ui [--hwnd H] [--depth N] [--max N]   compact inventory: named/actionable controls only\n" +
 "  find --name TEXT [--hwnd H]   search UIA elements by name/automationId\n" +
 "  hit --x X --y Y               what is under a screen point\n" +
 "  inputcheck                    prove that synthetic input actually lands (do this first)\n" +
@@ -402,6 +404,7 @@ static class Program
         string desk;
         bool locked = SessionLocked(out desk);
         o.Append(",\"locked\":").Append(J.B(locked));
+        o.Append(",\"lockAppRunning\":").Append(J.B(LockAppRunning()));
         if (desk != null) o.Append(",\"inputDesktopName\":").Append(J.S(desk));
         o.Append(",\"foreground\":").Append(WinJson(Native.GetForegroundWindow()));
         o.Append('}');
@@ -809,6 +812,121 @@ static class Program
         o.Append("{\"ok\":true,\"count\":").Append(ctx.Nodes).Append(",\"truncated\":").Append(truncated);
         o.Append(",\"root\":").Append(hwnd == IntPtr.Zero ? "null" : WinJson(hwnd));
         o.Append(",\"nodes\":").Append(ctx.B.ToString()).Append('}');
+        Emit(o.ToString());
+    }
+
+    // ---------------------------------------------------------------- ui ----
+    // A tree dump answers "what is in this window" but costs thousands of tokens
+    // and is mostly containers with no name. `ui` answers the question an agent
+    // actually asks - "what can I touch, and what is it called" - and stays small
+    // enough to read every turn.
+    class UiCtx
+    {
+        public StringBuilder B = new StringBuilder();
+        public bool First = true;
+        public int Count;
+        public int Max = 60;
+        public int Texts;
+        public int Scanned;
+        public int ScanCap = 4000;
+        public bool Truncated;
+    }
+
+    static bool UiActionable(string role)
+    {
+        switch (role)
+        {
+            case "Button": case "Edit": case "ComboBox": case "CheckBox": case "RadioButton":
+            case "TabItem": case "MenuItem": case "ListItem": case "Hyperlink": case "Slider":
+            case "Spinner": case "TreeItem": case "DataItem": case "SplitButton": case "ToolBar":
+            case "Menu": case "Tree": case "Table": case "List":
+                return true;
+        }
+        return false;
+    }
+
+    static void UiAdd(AutomationElement el, string id, int depth, int maxDepth, UiCtx ctx)
+    {
+        TreeWalker w = TreeWalker.ControlViewWalker;
+        ctx.Scanned++;
+        if (ctx.Count >= ctx.Max || ctx.Scanned > ctx.ScanCap) { ctx.Truncated = true; return; }
+        bool descend = depth < maxDepth;
+        try
+        {
+            AutomationElement.AutomationElementInformation cur = el.Current;
+            string ct = cur.ControlType == null ? "?" : cur.ControlType.ProgrammaticName.Replace("ControlType.", "");
+            string name = Safe(cur.Name);
+            if (name.Length > 120) name = name.Substring(0, 120) + "\u2026";
+            bool actionable = UiActionable(ct);
+            bool label = ct == "Text" && name.Length > 0 && name.Length <= 40 && ctx.Texts < 12;
+            bool emit = actionable ? (name.Length > 0 || cur.IsEnabled) : label;
+            if (cur.IsOffscreen) { descend = false; emit = false; }
+            if (emit)
+            {
+                string value = "";
+                if (ct == "Edit" || ct == "Document")
+                {
+                    try
+                    {
+                        object pat;
+                        if (el.TryGetCurrentPattern(ValuePattern.Pattern, out pat))
+                            value = Safe(((ValuePattern)pat).Current.Value);
+                    }
+                    catch { }
+                }
+                if (!ctx.First) ctx.B.Append(',');
+                ctx.First = false;
+                ctx.Count++;
+                if (label && !actionable) ctx.Texts++;
+                ctx.B.Append("{\"id\":").Append(J.S(id));
+                ctx.B.Append(",\"role\":").Append(J.S(ct));
+                if (name.Length > 0) ctx.B.Append(",\"name\":").Append(J.S(name));
+                if (value.Length > 0 && value != name) ctx.B.Append(",\"value\":").Append(J.S(value.Length > 60 ? value.Substring(0, 60) + "\u2026" : value));
+                ctx.B.Append(",\"rect\":").Append(RectOf(el));
+                if (!cur.IsEnabled) ctx.B.Append(",\"disabled\":true");
+                ctx.B.Append('}');
+            }
+        }
+        catch { }
+        if (!descend || ctx.Count >= ctx.Max || ctx.Scanned > ctx.ScanCap) { if (ctx.Count >= ctx.Max) ctx.Truncated = true; return; }
+        AutomationElement ch = null;
+        try { ch = w.GetFirstChild(el); } catch { }
+        int i = 0;
+        while (ch != null)
+        {
+            UiAdd(ch, id + "." + i, depth + 1, maxDepth, ctx);
+            try { ch = w.GetNextSibling(ch); } catch { ch = null; }
+            i++;
+        }
+    }
+
+    static void Ui(Cmd c)
+    {
+        AutomationElement root = RootOf(c);
+        int maxDepth = c.I("depth", 10);
+        UiCtx ctx = new UiCtx();
+        ctx.Max = c.I("max", 60);
+        ctx.B.Append('[');
+        AutomationElementCollection kids = root.FindAll(TreeScope.Children, Condition.TrueCondition);
+        int i = 0;
+        foreach (AutomationElement k in kids)
+        {
+            UiAdd(k, i.ToString(CultureInfo.InvariantCulture), 0, maxDepth, ctx);
+            i++;
+        }
+        ctx.B.Append(']');
+        IntPtr hwnd = IntPtr.Zero;
+        string hs = c.Get("hwnd", null);
+        if (hs != null) hwnd = new IntPtr(long.Parse(hs, CultureInfo.InvariantCulture));
+        StringBuilder o = new StringBuilder();
+        o.Append("{\"ok\":true,\"count\":").Append(ctx.Count);
+        o.Append(",\"scanned\":").Append(ctx.Scanned);
+        o.Append(",\"truncated\":").Append(J.B(ctx.Truncated));
+        o.Append(",\"root\":").Append(hwnd == IntPtr.Zero ? "null" : WinJson(hwnd));
+        o.Append(",\"items\":").Append(ctx.B.ToString());
+        if (ctx.Count == 0)
+            o.Append(",\"hint\":\"no named controls: this window is custom-drawn or hides accessibility; use screenshot, or readtext for its text\"");
+        o.Append('}');
         Emit(o.ToString());
     }
 
@@ -1447,6 +1565,10 @@ static class Program
             if (wantPid != 0 && pid != wantPid) return true;
             string title = WindowTitle(h);
             bool visible = Native.IsWindowVisible(h);
+            // The question this command answers is "is something on screen eating my
+            // clicks", so hidden helpers and disabled ghosts are noise: leave them out
+            // unless --all is given.
+            if (!visible && !c.Has("all")) return true;
             if (!visible && title.Length == 0) return true;
             bool enabled = Native.IsWindowEnabled(h);
             string cls = ClassOf(h);
