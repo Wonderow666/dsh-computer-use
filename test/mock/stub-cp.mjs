@@ -40,6 +40,7 @@ function payload(cmd, o) {
     case "shot":
       return {
         ok: true, path: o.out, x: 0, y: 0,
+        bytes: o["min-bytes"] ? 480426 : 3120,
         w: Number(o.maxw || 1600), h: Math.round(Number(o.maxw || 1600) * 1600 / 2560),
         srcW: 2560, srcH: 1600,
         ...(o.trim ? { trim: { x: 12, y: 30, w: 400, h: 120 } } : {}),

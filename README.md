@@ -1,4 +1,4 @@
-# dsh-computer-use
+﻿# dsh-computer-use
 
 [![CI](https://github.com/Wonderow666/dsh-computer-use/actions/workflows/ci.yml/badge.svg)](https://github.com/Wonderow666/dsh-computer-use/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/Wonderow666/dsh-computer-use/blob/main/LICENSE)
@@ -57,7 +57,7 @@ dsh plugin --profile desktop add link:F:\path\to\dsh-computer-use
 | 预检 | `inputcheck` | 移动光标再复位，回报 `landed`/`integrity`/`locked`/`pointerDrifting` 与一句结论。**动手前先跑它** |
 | 观察 | `info` | 屏幕/虚拟桌面尺寸、每台显示器 dpi 与缩放、光标、前台窗口、`locked`、输入桌面名 |
 | | `windows` / `procs` | 顶层窗口（hwnd/title/class/process/pid/rect/foreground）或进程列表 |
-| | `screenshot` | PNG 路径 + `srcW/srcH/w/h/scale`，默认缩到 1600 宽；支持 `region` 裁剪与 **`trim`（按内容裁剪）** |
+| | `screenshot` | PNG 路径 + `srcW/srcH/w/h/scale`，默认缩到 1600 宽；支持 `region` 裁剪、**`trim`（按内容裁剪）** 与 **`minBytes`（拒绝空白图）** |
 | | `snapshot` | UI Automation 控制树，元素 id 形如 `0.2.1`，带类型与矩形 |
 | | `find` / `hit` | 按名称找控件 / 查某坐标下是什么窗口与控件 |
 | | `geom` | 窗口矩形 + **客户区原点** + dpi，几何断言的唯一来源 |
@@ -83,6 +83,8 @@ dsh plugin --profile desktop add link:F:\path\to\dsh-computer-use
 - `type --verify`：打完字回读一次，文本没出现就**报错**而不是假装成功（输入法组合、密码框、焦点丢失都会被抓到）；窗口没有文本通道时返回 `verified: "unavailable"`，明确告诉模型改用视觉核对。
 
 限制也写清楚：Chromium 系窗口默认不暴露渲染内容（需要 `--force-renderer-accessibility`），此时 `readtext` 会诚实地返回 `none` 而不是编造文本；`--trim` 只在背景比较单色时有效，照片壁纸背景会被判成"全是内容"从而不裁。
+
+- `screenshot --minBytes 15000`：**证据类截图的体检**。屏幕熄灭、窗口被遮住、整帧全黑时，PNG 会压到几 KB——看起来"拍成功了"，插进报告才发现是白图。给了下限就直接报错：`the screenshot is only 5708 bytes (< --min-bytes 15000), so it is blank or the window was not visible`。返回体里恒有 `bytes` 字段，可以自己判。
 
 一次典型调用看起来是这样（模型侧）：
 
@@ -146,8 +148,10 @@ Windows 有三套机制会让注入的输入**无声无息地消失**——`Send
 | 静默失败源 | 现象 | 判断 | 处理 |
 | --- | --- | --- | --- |
 | **进程完整性过低** | `SetCursorPos` 返回 False；`SendInput` 返回 1 但指针不动 | `inputcheck` → `integrity: "LOW"` | 引擎必须从**非低完整性**路径运行（见下） |
-| **工作站已锁屏** | 同上，且前台窗口是锁屏界面 | `inputcheck` → `locked: true` | 解锁屏幕，没有别的办法 |
+| **工作站已锁屏** | 同上，且前台窗口是锁屏界面 | `inputcheck` → `locked: true`（输入桌面不是 `Default`，或 `LockApp`/`LogonUI` 在跑） | 解锁屏幕，没有别的办法 |
 | **目标进程已提权（UIPI）** | 目标窗口收不到输入 | `inputcheck` → 前台进程提权而引擎没有 | 提权运行目标，或别用提权程序 |
+
+**锁屏这一条最容易误判**：现代 Windows 在 `Default` 桌面上渲染锁屏，所以 `OpenInputDesktop` 明明返回 `Default`、`locked` 曾经也会报 false，而 `SetCursorPos` 照样失败。现在引擎会同时看 `LockApp`/`LogonUI` 进程是否存在，`inputcheck` 里多一个 `lockAppRunning` 字段；两个证人一致才敢说“没锁”。
 
 **低完整性这一条尤其隐蔽**：DSH 给会话工作目录打上 `Low Mandatory Level` 标签（它沙箱的一部分），而 Windows 会**用镜像文件的完整性标签启动进程**。于是从 `F:\Dharness\...\bin\cu.exe` 启动的引擎是 LOW 进程——它能看屏幕、能读控件树，但 `SetCursorPos`/`SendInput` 一律被丢弃。
 
@@ -170,7 +174,7 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1
 # 连测试夹具一起编（test/target/target.exe，供 input.mjs 用）
 powershell -ExecutionPolicy Bypass -File .\build.ps1 -Test
 
-# 插件契约单测：mock 掉引擎，校验 argv 映射/窗口解析/安全闸/干跑/长文本落盘（59 项）
+# 插件契约单测：mock 掉引擎，校验 argv 映射/窗口解析/安全闸/干跑/长文本落盘（61 项）
 node test\run-tests.mjs
 
 # 真机观察链路：真插件 + 真 spawn + 真 cu.exe，只读不注入
@@ -186,9 +190,9 @@ node test\console.mjs
 node test\input.mjs
 ```
 
-最近一次全量结果：`59 passed, 0 failed`；`e2e.mjs` 观察链路 OK；`readtext.mjs` 10 项全过（控制台读到 400 字符、`waittext` 109 ms 命中提示符、`--trim` 1440×720 → 483×720 且 PNG 678 KB → 12 KB）；`console.mjs` 七步全过；`input.mjs` 两条闭环都 `MATCH`（`SendInput` 键盘与 UIA `SetValue`/`Invoke` 各自独立验证）。
+最近一次全量结果：`61 passed, 0 failed`；`e2e.mjs` 观察链路 OK；`readtext.mjs` 10 项全过（控制台读到 400 字符、`waittext` 109 ms 命中提示符、`--trim` 1440×720 → 483×720 且 PNG 678 KB → 12 KB）；`console.mjs` 七步全过；`input.mjs` 两条闭环都 `MATCH`（`SendInput` 键盘与 UIA `SetValue`/`Invoke` 各自独立验证）。
 
-CI（`.github/workflows/ci.yml`，windows-latest）每次 push 会自动跑「编译桥 → 断言 `bin/cu.exe` 存在 → 59 项契约单测」，并把编出来的 `cu.exe` 作为 artifact 上传。它只跑不抢焦点的部分，真机注入脚本 `console.mjs` / `input.mjs` 需要人盯着，不进 CI。
+CI（`.github/workflows/ci.yml`，windows-latest）每次 push 会自动跑「编译桥 → 断言 `bin/cu.exe` 存在 → 61 项契约单测」，并把编出来的 `cu.exe` 作为 artifact 上传。它只跑不抢焦点的部分，真机注入脚本 `console.mjs` / `input.mjs` 需要人盯着，不进 CI。
 
 `bin/cu.exe` 也可以单独用，方便排查（它自己就是命令行程序，JSON 打到 stdout）：
 

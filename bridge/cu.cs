@@ -314,7 +314,7 @@ static class Program
 "commands:\n" +
 "  info                          monitors, dpi, cursor, foreground window\n" +
 "  windows [--all]               list top-level windows\n" +
-"  shot --out FILE [--hwnd H] [--region l,t,r,b] [--trim] [--tol N] [--pad N] [--nocursor] [--printwindow]\n" +
+"  shot --out FILE [--hwnd H] [--region l,t,r,b] [--trim] [--tol N] [--pad N] [--min-bytes N] [--nocursor] [--printwindow]\n" +
 "  readtext [--hwnd H] [--chars N]   read the window's text back (UIA text/value, else win32)\n" +
 "  waittext --regex R [--hwnd H] [--timeout MS]   poll readtext until the text matches\n" +
 "  tree [--hwnd H] [--depth N] [--max N]   UI Automation control-view tree with element ids\n" +
@@ -680,8 +680,20 @@ static class Program
             }
         }
         Native.POINT pc; Native.GetCursorPos(out pc);
+        long bytes = 0;
+        try { bytes = new FileInfo(outp).Length; } catch { }
+        // A blank capture (hidden window, screen asleep, all-black frame) compresses
+        // to a few thousand bytes. Callers that need a real picture can demand a
+        // floor instead of shipping an empty image into a report.
+        int minBytes = c.I("min-bytes", 0);
+        if (minBytes > 0 && bytes < minBytes)
+        {
+            Err("the screenshot is only " + bytes + " bytes (< --min-bytes " + minBytes + "), so it is blank or the window was not visible; bring it to the foreground (focus) and retry");
+            return;
+        }
         StringBuilder o = new StringBuilder();
         o.Append("{\"ok\":true,\"path\":").Append(J.S(Path.GetFullPath(outp)));
+        o.Append(",\"bytes\":").Append(bytes);
         o.Append(",\"x\":").Append(rect.Left).Append(",\"y\":").Append(rect.Top);
         o.Append(",\"w\":").Append(savedW).Append(",\"h\":").Append(savedH);
         o.Append(",\"srcW\":").Append(rect.Width).Append(",\"srcH\":").Append(rect.Height);
@@ -1180,6 +1192,27 @@ static class Program
         finally { Native.CloseDesktop(d); }
     }
 
+    // Modern Windows renders the lock screen on the Default desktop, so the input
+    // desktop name alone says "unlocked" while every synthetic event is thrown
+    // away. The lock/logon processes are the reliable second witness.
+    static bool LockAppRunning()
+    {
+        try
+        {
+            string[] names = { "LockApp", "LogonUI" };
+            for (int i = 0; i < names.Length; i++)
+            {
+                Process[] ps = Process.GetProcessesByName(names[i]);
+                if (ps == null) continue;
+                bool any = ps.Length > 0;
+                for (int k = 0; k < ps.Length; k++) ps[k].Dispose();
+                if (any) return true;
+            }
+        }
+        catch { }
+        return false;
+    }
+
     // A locked workstation switches the input desktop to the secure one: every
     // synthetic event is dropped and SetCursorPos returns FALSE. This is the
     // single most confusing state to debug, so name it explicitly.
@@ -1188,7 +1221,8 @@ static class Program
         bool opened;
         inputDesktop = InputDesktopName(out opened);
         if (!opened) return true; // access denied: the secure desktop is up
-        return inputDesktop != null && !String.Equals(inputDesktop, "Default", StringComparison.OrdinalIgnoreCase);
+        if (inputDesktop != null && !String.Equals(inputDesktop, "Default", StringComparison.OrdinalIgnoreCase)) return true;
+        return LockAppRunning();
     }
 
     static string LockHint()
@@ -1273,6 +1307,7 @@ static class Program
         o.Append(",\"pointerDrifting\":").Append(J.B(drifting));
         o.Append(",\"inputDesktop\":").Append(J.B(inputDesktop));
         o.Append(",\"locked\":").Append(J.B(locked));
+        o.Append(",\"lockAppRunning\":").Append(J.B(LockAppRunning()));
         if (desk != null) o.Append(",\"inputDesktopName\":").Append(J.S(desk));
         if (il != null) o.Append(",\"integrity\":").Append(J.S(il));
         o.Append(",\"selfElevated\":").Append(SelfElevated() == 1 ? "true" : "false");

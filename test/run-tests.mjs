@@ -287,6 +287,15 @@ console.log("\n[readtext / waittext / trim / verify]");
   await t.execute({ action: "screenshot" }, {});
   check("screenshot does not trim by default", () => assert.ok(!callOf("shot")[1].argv.includes("--trim")));
 
+  const sMin = text(await t.execute({ action: "screenshot", minBytes: 15000 }, {}));
+  check("screenshot forwards minBytes as --min-bytes", () => {
+    const a = callOf("shot")[2].argv;
+    eq(a[a.indexOf("--min-bytes") + 1], "15000");
+    eq(sMin.bytes, 480426);
+  });
+  await t.execute({ action: "screenshot", minBytes: 0 }, {});
+  check("screenshot omits --min-bytes when it is zero", () => assert.ok(!callOf("shot")[3].argv.includes("--min-bytes")));
+
   await t.execute({ action: "type", hwnd: "656368", text: "echo hi", verify: true }, {});
   check("type --verify reaches the engine", () => {
     const a = callOf("type")[0].argv;
