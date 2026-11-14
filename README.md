@@ -3,9 +3,9 @@
 [![CI](https://github.com/Wonderow666/dsh-computer-use/actions/workflows/ci.yml/badge.svg)](https://github.com/Wonderow666/dsh-computer-use/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/Wonderow666/dsh-computer-use/blob/main/LICENSE)
 
-> 让 [DeepSeek Harness](https://github.com/deepseek-ai/dsh)（DSH）真正“动手”操作 Windows 桌面的原生插件：看屏幕、读控件树、点击、打字、启动/关闭软件。全部能力收在一个 `computer` 工具里，底层是一个 41 KB 的单文件 C# 桥 `bin/cu.exe`（Win32 + UI Automation，无第三方依赖、无 Python、不需要视觉模型）。
+> 让 [DeepSeek Harness](https://github.com/deepseek-ai/dsh)（DSH）真正“动手”操作 Windows 桌面的原生插件：看屏幕、读控件树、点击、打字、启动/关闭软件。全部能力收在一个 `computer` 工具里，底层是一个 70 KB 的单文件 C# 桥 `bin/cu.exe`（Win32 + UI Automation，无第三方依赖、无 Python、不需要视觉模型）。
 
-> **English TL;DR** — a native DSH plugin that gives the agent control of a Windows desktop through a single `computer` tool: 19 actions covering screen capture, the UI Automation tree, SendInput mouse/keyboard injection, UIA pattern invocation (`SetValue`/`Invoke` with no focus or pixel dependency), app launch/kill, clipboard and process listing. The engine is one 41 KB C# file compiled by the .NET Framework compiler that ships with Windows — no Python, no MCP hop, no service to keep alive, no vision model required (screenshots are written to disk and returned as paths, then read by whatever vision tool the host has). Input is guarded three times: a configurable per-process blocklist, a hard "target must be foreground" refusal, and a dual-witness point-ownership check before every click. MIT, Windows 10/11, DSH 0.2.x.
+> **English TL;DR** — a native DSH plugin that gives the agent control of a Windows desktop through a single `computer` tool: 35 actions covering screen capture, the UI Automation tree, a compact control inventory, text readback, SendInput mouse/keyboard injection, UIA pattern invocation (`SetValue`/`Invoke` with no focus or pixel dependency), one-call step plans, cross-machine `exec` over VMware Tools or ssh, per-app profiles, plus an optional read-only panel a human can point at. The engine is one 70 KB C# file compiled by the .NET Framework compiler that ships with Windows — no Python, no MCP hop, no service to keep alive, no vision model required (screenshots are written to disk and returned as paths, then read by whatever vision tool the host has). Input is guarded three times: a configurable per-process blocklist, a hard "target must be foreground" refusal, and a dual-witness point-ownership check before every click. MIT, Windows 10/11, DSH 0.2.x.
 
 [<img src="https://cdn.jsdelivr.net/gh/Wonderow666/dsh-computer-use@main/docs/input-roundtrip.png" width="560" alt="测试窗口：插件通过 UI Automation 的 Value 模式把文字写进输入框，再通过 Invoke 模式点下保存按钮">](https://github.com/Wonderow666/dsh-computer-use/blob/main/docs/input-roundtrip.png)
 
@@ -50,7 +50,7 @@ dsh plugin --profile desktop add link:F:\path\to\dsh-computer-use
 
 重启后模型侧多出一个 `computer` 工具。插件配置在 `cordis.patch.yml`（`blockedProcesses`、`refuseFullscreenForeground`、`allowProcessControl`、`timeoutMs`、`enginePath`、`artifactsDir`），profile 自己的 `cordis.patch.yml` 可以按 id 覆盖这些字段。
 
-## 工具面（单一 `computer`，34 个 action）
+## 工具面（单一 `computer`，35 个 action）
 
 | 类别 | action | 返回 |
 | --- | --- | --- |
@@ -67,11 +67,12 @@ dsh plugin --profile desktop add link:F:\path\to\dsh-computer-use
 | | `hover` | 移到目标控件驻留后读 UIA 的 name/helpText/acceleratorKey 与 `tooltips_class32` 文本 |
 | | **`readtext`** | 把窗口的文字读回来（UIA Text/Value → win32 `WM_GETTEXT` 兜底），返回 `text`/`strategy`/`sources` |
 | | **`waittext`** | 轮询 `readtext` 直到正则命中，返回 `matched`/`waitedMs`/`text`；超时给出已读到的尾部文本 |
-| 批量 | **`run`** | **一次调用执行整份计划**（`wait`/`type`/`key`/`click`/`clickrel`/`invoke`/`read`/`shot`），只回每步一行 transcript；输入前自动置前 |
+| 批量 | **`run`** | **一次调用执行整份计划**（`wait`/`type`/`key`/`click`/`clickrel`/`invoke`/`read`/`shot`），只回每步一行 transcript；输入前自动置前；也可用 `profile` + `task` 重放存好的计划 |
 | 输入 | `click` `move` `scroll` `drag` | SendInput 注入，物理像素坐标；支持 `hwnd`/`title` 定位与 **`relx`/`rely`（客户区相对坐标）** |
 | | `type` `key` | Unicode 键入（中文安全）；**`type` 可加 `verify`** 回读校验；`key` 走组合键 `"ctrl+shift+s"` |
 | | `invoke` | 通过 UIA 的 Invoke/Toggle/Select/SetValue 模式驱动控件，不依赖焦点与像素 |
 | 生命周期 | `launch` `kill` `focus` `wait` | 启动进程（可带参数/工作目录）、结束进程、置前、等待 |
+| 应用知识 | **`profiles`** | 列出配置好的应用画像（匹配规则、可重放的计划名、控件别名），**不返回计划正文** |
 | 跨机执行 | **`targets`** | 列出配置好的远端目标（VMware 虚拟机 / ssh 主机），不联网、不起进程 |
 | | **`exec`** | 在目标里跑一条命令，返回 `exitCode` 与 stdout 尾部（默认上限 8000 字符） |
 | | **`put` / `get`** | 与目标之间传文件（vmrun 走 Tools 复制，ssh 走 stdin/`cat`，二进制安全） |
@@ -186,6 +187,47 @@ targets:
 - 凭证写在 profile 配置里，`exec` 以该用户身份运行；它**不受** `blockedProcesses` 约束——那是给本机 GUI 输入用的护栏，跨机命令是另一回事，别把这两件事混在一起。
 - 目前 vmware 后端假设 guest 是 POSIX（`/bin/bash`）。Windows guest 需要 `cmd`/`powershell` 版的包装器，还没做——那种机器仍然走 GUI，或用 guest 里自己开的 ssh。
 - 没有 Tools、也不通 ssh 的虚拟机（比如刚装完没配网络的），`exec` 会直接报错并说明；这时再退回 `targets` 之外的 GUI 动作。
+
+## 应用画像：把"这个软件怎么用"变成数据（v0.8.0）
+
+引擎和协议是通用的，但**每个软件的知识不通用**：窗口怎么认、那个按钮叫什么、这套步骤上次是怎么走通的。放在一次性脚本里，换个软件就要重写一遍；写进配置，就变成"换软件只写 JSON"。
+
+一个 profile 包含四件事：怎么认窗口（`match`）、控件叫什么（`aliases`）、哪些步骤已经验证过（`plans`）、以及给人看的备注（`notes`）。
+
+```yaml
+profiles:
+  pt:                                       # 名字随便起，action 里用它
+    match: { process: PacketTracer.exe, class: "Qt5*" }   # 全中才算命中
+    notes: 调色板在 y=1404，每放一个设备要重新点型号
+    aliases:
+      panel: "0.1.3.0.2.0"                  # 设备类别栏
+      addLink: "0.2.2"
+    plans:
+      new-topology: |
+        key ctrl+n
+        wait /是否要保存/ 3000
+        click --name No
+      inspect:
+        - readtext
+        - wait /工作区列表/ 4000
+```
+
+用法（三个入口，都不需要模型自己找窗口）：
+
+```jsonc
+{ "action": "profiles" }                                      // 有哪些画像、各自能重放什么
+{ "action": "state" }                                         // 输出里的 profile 就是当前前台应用命中的画像
+{ "action": "run", "profile": "pt", "task": "new-topology" }   // 重放，窗口由 match 自动定位
+{ "action": "run", "profile": "pt", "plan": "invoke {{panel}} 设备" }  // 临时计划，别名照样生效
+```
+
+设计上的几处取舍：
+
+- **窗口由 `match` 解析，不由调用方传 hwnd。** 计划因此可以跨会话复用；窗口挪了、缩放了、重启了都不影响。
+- **`process`/`class` 无通配符时是全等比较，不是子串。** `Qt5` 不会误配 `Qt51516QWindowIcon`——误配到别的窗口比配不上更糟。要模糊匹配就写 `Qt5*`。
+- **计划正文不列出来。** `profiles` 只回名字，避免每次调用都把几 KB 的计划塞进上下文；要用哪份就点哪份。
+- **别名只替换参数部分**，`{{panel}}` 出现在 `rest` 里才会展开，避免把 `op` 也替换掉。
+- 报错都带上下文：未知画像列出已有名字，未知计划列出可选项，未知窗口列出当前打开的窗口。
 
 ## 可视化面板：人给模型指路
 
@@ -308,6 +350,9 @@ node test\panel.mjs
 # 跨机执行：vmrun/ssh 的 argv、真实退出码、二进制传输、stdout 截断（27 项，纯单测不抢焦点）
 node test\targets.mjs
 
+# 应用画像：匹配语义、别名替换、profile+task 重放、错误信息（37 项，纯单测不抢焦点）
+node test\profiles.mjs
+
 # 控制台闭环：launch cmd → 打字 → 回车 → 校验命令真的执行了（会抢焦点）
 node test\console.mjs
 
@@ -315,9 +360,9 @@ node test\console.mjs
 node test\input.mjs
 ```
 
-最近一次全量结果：`71 passed, 0 failed`；`targets.mjs` 27 项全过（vmrun/ssh argv、guest 真实退出码、二进制 `get` 字节一致、stdout 只留尾部）；`e2e.mjs` 观察链路 OK；`readtext.mjs` 10 项全过（控制台读到 400 字符、`waittext` 109 ms 命中提示符、`--trim` 1440×720 → 483×720 且 PNG 678 KB → 12 KB）；`plan.mjs` 9 项全过（5 步计划一次调用 108 字节 transcript、`done 5/5 in 1.2s`、失败时带上窗口尾部文本）；`panel.mjs` 27 项全过（无 token 401、目录外文件 404、`kill` 403、前缀挂载、客户端 bundle 注册 tab 与 settings section）；`console.mjs` 七步全过；`input.mjs` 两条闭环都 `MATCH`（`SendInput` 键盘与 UIA `SetValue`/`Invoke` 各自独立验证）。
+最近一次全量结果：`71 passed, 0 failed`；`profiles.mjs` 37 项全过（匹配语义、`profiles` 不泄漏计划正文、`state.profile` 命中/未命中、`run` 用 `profile`+`task` 自动定位窗口并解析 `{{alias}}`、未知画像/计划/窗口的报错）；`targets.mjs` 27 项全过（vmrun/ssh argv、guest 真实退出码、二进制 `get` 字节一致、stdout 只留尾部）；`e2e.mjs` 观察链路 OK；`readtext.mjs` 10 项全过（控制台读到 400 字符、`waittext` 109 ms 命中提示符、`--trim` 1440×720 → 483×720 且 PNG 678 KB → 12 KB）；`plan.mjs` 9 项全过（5 步计划一次调用 108 字节 transcript、`done 5/5 in 1.2s`、失败时带上窗口尾部文本）；`panel.mjs` 27 项全过（无 token 401、目录外文件 404、`kill` 403、前缀挂载、客户端 bundle 注册 tab 与 settings section）；`console.mjs` 七步全过；`input.mjs` 两条闭环都 `MATCH`（`SendInput` 键盘与 UIA `SetValue`/`Invoke` 各自独立验证）。
 
-CI（`.github/workflows/ci.yml`，windows-latest）每次 push 会自动跑「编译桥 → 断言 `bin/cu.exe` 存在 → 71 项契约单测 → 27 项跨机适配单测」，并把编出来的 `cu.exe` 作为 artifact 上传。它只跑不抢焦点的部分，真机注入脚本 `console.mjs` / `input.mjs` / `plan.mjs` 需要人盯着，不进 CI。
+CI（`.github/workflows/ci.yml`，windows-latest）每次 push 会自动跑「编译桥 → 断言 `bin/cu.exe` 存在 → 71 项契约单测 → 27 项跨机适配单测 → 37 项画像单测」，并把编出来的 `cu.exe` 作为 artifact 上传。它只跑不抢焦点的部分，真机注入脚本 `console.mjs` / `input.mjs` / `plan.mjs` 需要人盯着，不进 CI。
 
 `bin/cu.exe` 也可以单独用，方便排查（它自己就是命令行程序，JSON 打到 stdout）：
 

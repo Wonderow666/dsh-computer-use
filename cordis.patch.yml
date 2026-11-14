@@ -20,6 +20,9 @@
 #                                this loopback port (default off; false = off)
 #   targets                    - remote machines the `exec` / `put` / `get`
 #                                actions can reach (off by default; see below)
+#   profiles                   - per-app knowledge: how to recognise the window,
+#                                what the controls are called, which step
+#                                sequences already worked (off by default)
 # ============================================================================
 
 - insert:
@@ -57,3 +60,16 @@
         #     host: 10.10.177.222
         #     user: root
         #     key: C:\Users\you\.ssh\id_ed25519
+        # App profiles: the "how do I drive this program" knowledge as data.
+        # Once a profile exists, `run` can replay it and `state` names it when
+        # its window is in front - the plan never mentions a hwnd.
+        #
+        # profiles:
+        #   pt:
+        #     match: { process: PacketTracer.exe, class: "Qt5*" }
+        #     notes: palette sits at y=1404; re-click the model after each drop
+        #     aliases: { panel: "0.1.3.0.2.0", addLink: "0.2.2" }
+        #     plans:
+        #       inspect: |
+        #         readtext
+        #         wait /工作区列表/ 4000

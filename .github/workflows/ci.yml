@@ -40,6 +40,11 @@ jobs:
         shell: pwsh
         run: node test/targets.mjs
 
+      # Profiles are pure data manipulation plus the mocked tool surface.
+      - name: App profile tests
+        shell: pwsh
+        run: node test/profiles.mjs
+
       - name: Upload build output
         uses: actions/upload-artifact@v4
         with:
