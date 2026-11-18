@@ -5,6 +5,7 @@
 // Requires tesseract. Point DSH_TESSERACT at the binary, or put it on PATH.
 // The script skips itself when tesseract cannot be found, so CI stays green.
 
+import fs from "node:fs";
 import path from "node:path";
 import { loadTool } from "./_harness.mjs";
 
@@ -16,6 +17,7 @@ function check(name, cond, detail) {
 }
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname).replace(/^\//, ""), "..");
+const ARTIFACT_DIR = path.join(ROOT, "artifacts", "e2e");
 const { run } = await loadTool({ enginePath: undefined, tesseract: process.env.DSH_TESSERACT || "tesseract" });
 
 let launched = null;
@@ -79,6 +81,18 @@ check("waittext can wait on the pixels", waited.matched === true, `tries=${waite
 
 const session = await run({ action: "session" });
 check("session orients in one call", session.ok === true && Array.isArray(session.hint) && session.hint.length > 0, `${session.hint && session.hint.length} hint(s)`);
+
+// A plan built out of the pixel fallbacks, then saved as a profile: this is the
+// whole loop a real session runs (read -> wait -> record).
+const planText = await run({ action: "run", hwnd: String(con.hwnd), plan: "read 200 ocr", save: "ocr-live/smoke" });
+const savedPath = path.join(ARTIFACT_DIR, "profiles", "ocr-live.json");
+check("a plan can read the pixels and save itself as a profile",
+  /saved profile "ocr-live"/.test(String(planText.text)) && fs.existsSync(savedPath),
+  String(planText.text).split("\n").slice(0, 2).join(" | "));
+check("the saved profile names a match a later session can reuse",
+  (() => { try { const j = JSON.parse(fs.readFileSync(savedPath, "utf8")); return Boolean(j.match && (j.match.process || j.match.class)) && j.plans && j.plans.smoke; } catch { return false; } })());
+try { fs.rmSync(path.join(ARTIFACTS, "profiles"), { recursive: true, force: true }); } catch { /* best effort */ }
+
 const closed = await run({ action: "kill", pid: Number(pid) });
 check("console closed", Boolean(closed.ok !== false), JSON.stringify(closed));
 
