@@ -1,6 +1,6 @@
 {
   "name": "dsh-computer-use",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "Native Windows GUI control for DeepSeek Harness: screen capture, UI Automation tree, mouse and keyboard injection, app launch and kill, all behind one `computer` tool.",
   "keywords": [
     "dsh",
@@ -27,7 +27,8 @@
     "build.ps1",
     "cordis.patch.yml",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "profiles"
   ],
   "scripts": {
     "build": "powershell -ExecutionPolicy Bypass -File ./build.ps1",

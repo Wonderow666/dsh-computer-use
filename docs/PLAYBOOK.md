@@ -160,3 +160,7 @@
 - 同一套操作做过一次，就用 `run { save: "<id>/<task>" }` 存成数据，下次一行调用。
 - profile 的 `match` 只看 `process` + `class`：标题变了、窗口重开了也能命中。
 - 存下来的 JSON 在 `<artifacts>/profiles/<id>.json`，抄进 `cordis.patch.yml` 就永久生效。
+
+### 2.14 画像用文件，不用记忆
+
+第二次做同一件事、或者要把它交给别人时，别把步骤写在消息里：写成 `profiles/*.json`（`match` 只留 process/class，title 会变），跑通一次就用 `run { save: "<id>/<task>" }` 落盘。内联配置只留给临时试验。

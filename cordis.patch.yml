@@ -64,7 +64,8 @@
         # Once a profile exists, `run` can replay it and `state` names it when
         # its window is in front - the plan never mentions a hwnd.
         #
-        # profiles:
+        # profilesFile: profiles          # JSON 文件/目录（相对插件目录），内联 profiles 覆盖同名
+  # profiles:
         #   pt:
         #     match: { process: PacketTracer.exe, class: "Qt5*" }
         #     notes: palette sits at y=1404; re-click the model after each drop

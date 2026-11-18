@@ -254,6 +254,27 @@ read
 
 可选步骤失败只记一行 `skipped (optional)`，不影响后续步骤；必选步骤仍然失败即停。
 
+### 画像可以放在文件里（v0.12.0）
+
+写进 `cordis.patch.yml` 只适合一两个画像；真正要复用，画像应该是**能 diff、能 review 的 JSON**：
+
+```yaml
+# cordis.patch.yml
+config:
+  profilesFile: profiles            # 相对插件目录；也接受绝对路径或数组
+  # profiles: { ... }               # 内联的优先级更高，可覆盖同名画像
+```
+
+`profiles/` 下每个 `.json` 一个文件（或一个文件里放数组 / `{ "profiles": [...] }`），插件启动时按文件名顺序读入，同 id 时**内联覆盖文件**。仓库里带了一份可直接抄的 `profiles/example.json`（notepad / Packet Tracer / Horizon 三个例子，含 `notes` 说明为什么要那样写 `match`）。
+
+用法没变：
+
+```
+computer { action: "profiles" }                                  // 看有哪些画像（不含计划正文）
+computer { action: "run", profile: "packet-tracer", task: "read-screen" }
+computer { action: "run", profile: "notepad", task: "save", save: "notepad/save" }   // 跑通就落盘成画像
+```
+
 ## 跨机执行：先把另一台机器变成一条命令（token 账）
 
 `targets` / `exec` / `put` / `get` 是 v0.7.0 加的，起因是一次真实任务：在一台 CentOS 7 虚拟机里部署 OpenStack（关服务、改 SELinux、换源、跑 30 分钟的 `packstack`、验证 11 个组件）。如果按像素做，每一步都要「截图 → 看 → 点/打字 → 再截图确认」；实际做法是**用 VMware Tools 把命令送进 guest、把输出取回**，整场部署只拍了 5 张证据图，其余全部是文本往返。

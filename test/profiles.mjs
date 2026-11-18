@@ -6,6 +6,9 @@
 // no desktop, no focus stealing, no cu.exe.
 //
 //   node test/profiles.mjs
+import fs from "node:fs";
+import path from "node:path";
+import { tmpdir } from "node:os";
 import { register } from "node:module";
 import {
   normalizeProfiles,
@@ -15,7 +18,9 @@ import {
   planSource,
   substitute,
   applyAliasesToSteps,
-  windowMatches
+  windowMatches,
+  readProfileFiles,
+  mergeProfileLists
 } from "../lib/profiles.js";
 
 register("./mock/hooks.mjs", import.meta.url);
@@ -133,6 +138,31 @@ check("a profile that matches no window explains why", (await (async () => {
   const other = await loadTool({ profiles: { ghost: { match: { process: "ghost.exe" }, plans: { p: "read" } } } });
   return throws(() => other.run({ action: "run", profile: "ghost" }), "matches no open window");
 })()).ok);
+
+// Profiles can also live in JSON files, so an install can ship examples and a
+// team can review app knowledge like any other data.
+const tmpProfiles = path.join(tmpdir(), `dsh-profiles-${process.pid}`);
+fs.mkdirSync(tmpProfiles, { recursive: true });
+const fileA = path.join(tmpProfiles, "a.json");
+const fileB = path.join(tmpProfiles, "b.json");
+fs.writeFileSync(fileA, JSON.stringify({ profiles: [{ id: "alpha", match: { process: "alpha.exe" }, plans: { open: "read" } }] }), "utf8");
+fs.writeFileSync(fileB, JSON.stringify({ beta: { match: { process: "beta.exe" }, plans: { open: "wait /hi/ 900" } } }), "utf8");
+const fromDir = readProfileFiles([tmpProfiles]);
+check("a directory of profile files is read in filename order", fromDir.map((p) => p.id).join(",") === "beta,alpha" || fromDir.map((p) => p.id).join(",") === "alpha,beta", fromDir.map((p) => p.id).join(","));
+
+const merged = normalizeProfiles(mergeProfileLists(fromDir, { alpha: { match: { process: "alpha2.exe" }, plans: { open: "type hi" } } }));
+const alpha = merged.find((p) => p.id === "alpha");
+check("an inline profile overrides the shipped one with the same id", alpha.match.process === "alpha2.exe" && alpha.plans.open.includes("type hi"), JSON.stringify(alpha.match));
+
+const loaded = await loadTool({ profilesFile: tmpProfiles });
+calls.length = 0;
+const listed = await loaded.run({ action: "profiles" });
+check("profilesFile reaches the tool", listed.count === 2 && listed.profiles.some((p) => p.id === "alpha"), JSON.stringify(listed.profiles.map((p) => p.id)));
+
+fs.writeFileSync(path.join(tmpProfiles, "bad.json"), "{not json", "utf8");
+check("a broken profile file names the file", (await throws(async () => readProfileFiles([tmpProfiles]), "bad.json")).ok);
+check("a missing profile file explains itself", (await throws(async () => readProfileFiles([path.join(tmpProfiles, "nope.json")]), "cannot read")).ok);
+fs.rmSync(tmpProfiles, { recursive: true, force: true });
 
 // Mutating the stub between cases must not leak into other tests.
 state.typeVerify = null;
