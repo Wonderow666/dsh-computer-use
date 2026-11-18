@@ -69,12 +69,12 @@ dsh plugin --profile desktop add link:F:\path\to\dsh-computer-use
 | | **`ocr`** | **当应用根本不给文本时**从截图上读字（tesseract，默认 `chi_sim+eng`）。一次调用换回 `text`，省掉“截图→视觉模型”那条最贵的路。实测控制台 183 字 ≈ 1 秒 |
 | | **`readtext`** | 把窗口的文字读回来（UIA Text/Value → win32 `WM_GETTEXT` 兜底），返回 `text`/`strategy`/`sources` |
 | | **`waittext`** | 轮询 `readtext` 直到正则命中，返回 `matched`/`waitedMs`/`text`；超时给出已读到的尾部文本。**加 `ocr: true` 改成轮询像素**（引擎 `waitocr`），自绘界面也能等 |
-| 批量 | **`run`** | **一次调用执行整份计划**（`wait`/`type`/`key`/`click`/`clickrel`/`invoke`/`read`/`shot`），只回每步一行 transcript；输入前自动置前；也可用 `profile` + `task` 重放存好的计划 |
+| 批量 | **`run`** | **一次调用执行整份计划**（`wait`/`type`/`key`/`click`/`clickrel`/`invoke`/`read`/`shot`），只回每步一行 transcript；输入前自动置前；也可用 `profile` + `task` 重放存好的计划；`window` 按名字模糊选窗，`dryRun: true` 只解析不执行 |
 | 输入 | `click` `move` `scroll` `drag` | SendInput 注入，物理像素坐标；支持 `hwnd`/`title` 定位与 **`relx`/`rely`（客户区相对坐标）** |
 | | `type` `key` | Unicode 键入（中文安全）；**`type` 可加 `verify`** 回读校验；`key` 走组合键 `"ctrl+shift+s"` |
 | | `invoke` | 通过 UIA 的 Invoke/Toggle/Select/SetValue 模式驱动控件，不依赖焦点与像素 |
 | 生命周期 | `launch` `kill` `focus` `wait` | 启动进程（可带参数/工作目录）、结束进程、置前、等待 |
-| 应用知识 | **`profiles`** | 列出配置好的应用画像（匹配规则、可重放的计划名、控件别名），**不返回计划正文** |
+| 应用知识 | **`profiles`** | 列出配置好的应用画像（匹配规则、可重放的计划名、控件别名），**不返回计划正文**；加 `check: true` 会逐条体检（match 键、计划语法、别名引用）|
 | 跨机执行 | **`targets`** | 列出配置好的远端目标（VMware 虚拟机 / ssh 主机），不联网、不起进程 |
 | | **`exec`** | 在目标里跑一条命令，返回 `exitCode` 与 stdout 尾部（默认上限 8000 字符） |
 | | **`put` / `get`** | 与目标之间传文件（vmrun 走 Tools 复制，ssh 走 stdin/`cat`，二进制安全） |
@@ -274,6 +274,22 @@ computer { action: "profiles" }                                  // 看有哪些
 computer { action: "run", profile: "packet-tracer", task: "read-screen" }
 computer { action: "run", profile: "notepad", task: "save", save: "notepad/save" }   // 跑通就落盘成画像
 ```
+
+## 先验，再跑（v0.14.0）
+
+计划和画像都是**数据**，所以能在花掉一次真机运行之前先检查：
+
+| 想验证的 | 一行调用 | 它替你省掉的 |
+| --- | --- | --- |
+| 这份计划语法对不对、会打到哪个窗口 | `run { window: "notepad", plan: "...", dryRun: true }` | 一次真跑 + 一次回滚 |
+| 窗口名怎么写 | `run { window: "记事本", dryRun: true, plan: "read" }` | 先 `windows` 再数 hwnd 的两次往返 |
+| 画像有没有笔误 | `profiles { check: true }` | 跑到第 3 步才发现 `{{alias}}` 不存在 |
+
+- `window` 是**不区分大小写的子串**，会同时匹配标题、进程名和窗口类；找不到时错误信息里直接列出当前打开的窗口。
+- `dryRun` 返回 `{ ok, dryRun, target, steps }`：`target` 是真实解析到的窗口（含 `hwnd`/`pid`/`rect`），`steps` 是解析后的 `{ line, op, optional, rest }`。**不注入、不抢焦点、不落盘。**
+- `profiles { check: true }` 逐条检查 `match` 的键是否合法、`match` 是否为空、计划能否解析、`{{alias}}` 是否都有定义，返回 `{ ok, checked, failing, profiles: [{ id, ok, plans, problems }] }`。
+
+这不是花架子：随包的 `profiles/example.json` 第一次被 `check` 时就被抓出两处真错（`read-page` 和 `read` 写成了 `readtext`，而计划里的动作叫 `read`）。写完画像先 check，能省下的是一次"跑到一半才发现"的调试。
 
 ## 跨机执行：先把另一台机器变成一条命令（token 账）
 
@@ -488,7 +504,7 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1
 # 连测试夹具一起编（test/target/target.exe，供 input.mjs 用）
 powershell -ExecutionPolicy Bypass -File .\build.ps1 -Test
 
-# 插件契约单测：mock 掉引擎，校验 argv 映射/窗口解析/安全闸/干跑/长文本落盘（71 项）
+# 插件契约单测：mock 掉引擎，校验 argv 映射/窗口解析/安全闸/干跑/长文本落盘（93 项）
 node test\run-tests.mjs
 
 # 真机观察链路：真插件 + 真 spawn + 真 cu.exe，只读不注入
@@ -505,10 +521,10 @@ node test\plan.mjs
 # 面板：token、白名单、截图路由、目录外文件拒绝、前缀挂载与宿主挂载（27 项）
 node test\panel.mjs
 
-# 跨机执行：vmrun/ssh 的 argv、真实退出码、二进制传输、stdout 截断（27 项，纯单测不抢焦点）
+# 跨机执行：vmrun/ssh 的 argv、真实退出码、二进制传输、stdout 截断（38 项，纯单测不抢焦点）
 node test\targets.mjs
 
-# 应用画像：匹配语义、别名替换、profile+task 重放、错误信息（37 项，纯单测不抢焦点）
+# 应用画像：匹配语义、别名替换、profile+task 重放、错误信息（42 项，纯单测不抢焦点）
 node test\profiles.mjs
 
 # 画像的真机链路：launch cmd → profile 的 match 解析出真 hwnd → 重放只读计划（7 项，不抢焦点、不注入）
@@ -523,7 +539,7 @@ node test\input.mjs
 
 最近一次全量结果：`71 passed, 0 failed`；`profiles.mjs` 37 项全过（匹配语义、`profiles` 不泄漏计划正文、`state.profile` 命中/未命中、`run` 用 `profile`+`task` 自动定位窗口并解析 `{{alias}}`、未知画像/计划/窗口的报错）；`profile-live.mjs` 7 项全过（真机：`launch cmd` → profile 的 `match` 解析出 hwnd → 重放只读计划 → `readtext` 读到 400 字符，`strategy=uia`）；`targets.mjs` 27 项全过（vmrun/ssh argv、guest 真实退出码、二进制 `get` 字节一致、stdout 只留尾部）；`e2e.mjs` 观察链路 OK；`readtext.mjs` 10 项全过（控制台读到 400 字符、`waittext` 109 ms 命中提示符、`--trim` 1440×720 → 483×720 且 PNG 678 KB → 12 KB）；`plan.mjs` 9 项全过（5 步计划一次调用 108 字节 transcript、`done 5/5 in 1.2s`、失败时带上窗口尾部文本）；`panel.mjs` 27 项全过（无 token 401、目录外文件 404、`kill` 403、前缀挂载、客户端 bundle 注册 tab 与 settings section）；`console.mjs` 七步全过；`input.mjs` 两条闭环都 `MATCH`（`SendInput` 键盘与 UIA `SetValue`/`Invoke` 各自独立验证）。
 
-CI（`.github/workflows/ci.yml`，windows-latest）每次 push 会自动跑「编译桥 → 断言 `bin/cu.exe` 存在 → 71 项契约单测 → 27 项跨机适配单测 → 37 项画像单测」，并把编出来的 `cu.exe` 作为 artifact 上传。它只跑不抢焦点的部分，真机注入脚本 `console.mjs` / `input.mjs` / `plan.mjs` 需要人盯着，不进 CI。
+CI（`.github/workflows/ci.yml`，windows-latest）每次 push 会自动跑「编译桥 → 断言 `bin/cu.exe` 存在 → 93 项契约单测 → 38 项跨机适配单测 → 42 项画像单测」，并把编出来的 `cu.exe` 作为 artifact 上传。它只跑不抢焦点的部分，真机注入脚本 `console.mjs` / `input.mjs` / `plan.mjs` 需要人盯着，不进 CI。
 
 `bin/cu.exe` 也可以单独用，方便排查（它自己就是命令行程序，JSON 打到 stdout）：
 
@@ -559,7 +575,7 @@ dsh-computer-use/
 ├─ bridge/cu.cs          # C# 桥源码（单文件，C# 5 语法，csc.exe 可编）
 ├─ bin/cu.exe            # 编译产物（随仓库提供，装完即用）
 ├─ build.ps1             # 重新编译（-Test 连测试夹具一起编）
-├─ test/                 # 86 项单测 + 只读/闭环脚本 + mock + WinForms 夹具
+├─ test/                 # 93 项单测 + 只读/闭环脚本 + mock + WinForms 夹具
 └─ docs/                 # README 用图
 ```
 

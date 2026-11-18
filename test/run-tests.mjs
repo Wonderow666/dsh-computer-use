@@ -484,6 +484,67 @@ console.log("\n[saving a plan as a profile]");
     assert.ok(err && /bad profile id/.test(err.message), String(err && err.message));
   });
 }
+console.log("\n[window by name, dry run, profile lint]");
+{
+  const t = boot({
+    profiles: [
+      {
+        id: "notepad",
+        match: { process: "notepad.exe" },
+        aliases: { editor: "0.1.1" },
+        plans: { greet: "type {{editor}}\nread" }
+      },
+      {
+        id: "broken",
+        match: { typo: "x" },
+        plans: { oops: "wait /never/ 10\nbogus-step" }
+      }
+    ]
+  });
+
+  check("run picks the window from a fuzzy name", async () => {
+    cp.calls.length = 0;
+    await t.execute({ action: "run", window: "notepad", plan: "read" }, {});
+    eq(callOf("readtext").length, 1);
+    eq(callOf("readtext")[0].argv.includes("--hwnd"), true);
+    eq(callOf("readtext")[0].argv[callOf("readtext")[0].argv.indexOf("--hwnd") + 1], "999001");
+  });
+
+  check("an unknown window name suggests the open ones", async () => {
+    let err = null;
+    try { await t.execute({ action: "run", window: "no-such-window", plan: "read" }, {}); } catch (e) { err = e; }
+    assert.ok(err && /no open window matches/.test(err.message) && /Notepad/.test(err.message), String(err && err.message));
+  });
+
+  check("a dry run parses and resolves but sends nothing", async () => {
+    cp.calls.length = 0;
+    const r = text(await t.execute({ action: "run", window: "notepad", plan: "type hello\nwait /x/ 100", dryRun: true }, {}));
+    eq(r.dryRun, true);
+    eq(r.steps.length, 2);
+    eq(r.steps[0].op, "type");
+    eq(r.target.hwnd, 999001);
+    eq(callOf("type").length, 0);
+    eq(cp.calls.length, 1); // only the windows listing
+  });
+
+  check("profiles --check lints matches, plans and aliases", async () => {
+    const r = text(await t.execute({ action: "profiles", check: true }, {}));
+    eq(r.checked, 2);
+    eq(r.ok, false);
+    eq(r.failing, 1);
+    const bad = r.profiles.find((p) => p.id === "broken");
+    eq(bad.ok, false);
+    assert.ok(bad.problems.some((p) => /unknown key/.test(p)), JSON.stringify(bad.problems));
+    assert.ok(bad.problems.some((p) => /unknown step/.test(p)), JSON.stringify(bad.problems));
+  });
+
+  check("a profile that names an undefined alias fails the lint", async () => {
+    const t2 = boot({ profiles: [{ id: "aliased", match: { process: "notepad.exe" }, plans: { go: "type {{ghost}}" } }] });
+    const r = text(await t2.execute({ action: "profiles", check: true }, {}));
+    eq(r.ok, false);
+    assert.ok(r.profiles[0].problems.some((p) => /\{\{ghost\}\}/.test(p)), JSON.stringify(r.profiles[0].problems));
+  });
+}
 console.log("\n[engine failure]");
 {
   const t = boot({ timeoutMs: 5000 });

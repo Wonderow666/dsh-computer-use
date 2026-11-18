@@ -166,3 +166,9 @@ Window 客户机别忘写 `shell: windows`：这样 `exec` 会走 `cmd.exe /c` +
 ### 2.14 画像用文件，不用记忆
 
 第二次做同一件事、或者要把它交给别人时，别把步骤写在消息里：写成 `profiles/*.json`（`match` 只留 process/class，title 会变），跑通一次就用 `run { save: "<id>/<task>" }` 落盘。内联配置只留给临时试验。
+
+### 2.15 先 dry-run，再真跑；画像写完先 `check`
+
+计划是数据，所以不该用真机去验证语法。写完一份计划，先 `run { ..., dryRun: true }` 看它解析出的窗口和步骤；写完一份画像，先 `profiles { check: true }` 看 match、计划语法和 `{{alias}}` 引用是否都成立。两边都干净了再花真实的那一次。
+
+判据：**一次 dry-run 的代价是一次 `windows` 调用**，一次真跑的代价是几分钟、几次截图、以及一个可能已经点错的面板。

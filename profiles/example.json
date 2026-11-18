@@ -2,29 +2,41 @@
   "profiles": [
     {
       "id": "notepad",
-      "match": { "process": "notepad.exe" },
-      "notes": "The simplest real profile: Windows Notepad. `class` and `process` must match exactly, `title` is a regex.",
-      "aliases": { "editor": "0.1.1" },
+      "match": {
+        "process": "notepad.exe"
+      },
+      "notes": "The simplest real profile: Windows Notepad. `process` and `class` must match exactly, `title` is a regex.",
+      "aliases": {
+        "editor": "0.1.1"
+      },
       "plans": {
-        "save": ["key ctrl+s", "wait /Save as|另存为/ 4000"],
-        "read": "readtext"
+        "save": [
+          "key ctrl+s",
+          "wait /Save as|另存为/ 4000"
+        ],
+        "read": "read"
       }
     },
     {
       "id": "packet-tracer",
-      "match": { "class": "Qt51516QWindowIcon", "title": "Packet Tracer" },
-      "notes": "Cisco Packet Tracer 8.x is a Qt app: the whole widget tree is on UIA, and the IOS console lives in the device window (third tab). Read it with `readtext`, and fall back to `readtext {ocr:true}` when the terminal gives no text at all.",
+      "match": {
+        "class": "Qt51516QWindowIcon",
+        "title": "Packet Tracer"
+      },
+      "notes": "Cisco Packet Tracer 8.x is Qt: the widget tree is on UIA, and the IOS console lives in the device window. `read` gets the text; `read ocr` reads the pixels when the terminal exposes nothing.",
       "plans": {
         "read-screen": "read ocr",
-        "workspace-list": ["wait /工作区列表/ 8000"]
+        "workspace-list": "wait /Workspace List|工作区列表/ 8000"
       }
     },
     {
       "id": "horizon",
-      "match": { "title": "OpenStack Dashboard" },
+      "match": {
+        "title": "OpenStack Dashboard"
+      },
       "notes": "Browser dashboards: match on the title instead of the process, because every tab shares the browser's pid.",
       "plans": {
-        "read-page": "readtext"
+        "read-page": "read"
       }
     }
   ]
