@@ -50,7 +50,15 @@ function payload(cmd, o) {
         ]
       };
     case "modals":
-      return { ok: true, count: 0, items: [] };
+      // One real dialog plus one overlay widget: only the dialog counts.
+      return {
+        ok: true,
+        count: 2,
+        modals: [
+          { hwnd: 7001, title: "确认删除", class: "#32770", process: "notepad.exe", dialogClass: true, visible: true },
+          { hwnd: 7002, title: "NVIDIA GeForce Overlay DT", class: "CEF-OSC-WIDGET", process: "NVIDIA Overlay.exe", dialogClass: false, visible: true }
+        ]
+      };
     case "geom": {
       const w = state.windows.find((x) => String(x.hwnd) === String(o.hwnd)) || state.foreground;
       return {

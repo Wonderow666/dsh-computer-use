@@ -419,6 +419,10 @@ console.log("\n[session / ocr fallbacks]");
     eq(s.foreground.title, "DeepSeek Harness");
     eq(typeof s.modals, "number");
   });
+  check("session counts dialogs but not overlay widgets", () => {
+    // the stub reports one #32770 dialog and one NVIDIA overlay widget
+    eq(s.modals, 1);
+  });
 
   const r1 = text(await t.execute({ action: "readtext", hwnd: "656368", ocr: true }, {}));
   check("readtext falls back to ocr when asked", () => {
