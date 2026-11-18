@@ -69,6 +69,16 @@ check("an impossible quality gate refuses the capture", Boolean(refused) && /loo
 const shot = await run({ action: "screenshot", hwnd: String(con.hwnd), maxw: 0, minStddev: 1, minBrightness: 1 });
 check("a real frame passes the gate and reports mean/contrast", Number.isFinite(shot.mean) && Number.isFinite(shot.contrast), `mean=${shot.mean} contrast=${shot.contrast}`);
 
+// The same pixels, through the two friendly fallbacks: readtext(ocr) and a
+// wait that does not depend on the app exposing any text at all.
+const fallback = await run({ action: "readtext", hwnd: String(con.hwnd), ocr: true });
+check("readtext falls back to the pixels", fallback.strategy === "ocr" && fallback.chars > 20, `chars=${fallback.chars}`);
+
+const waited = await run({ action: "waittext", hwnd: String(con.hwnd), regex: "Microsoft", ocr: true, timeout: 5000 });
+check("waittext can wait on the pixels", waited.matched === true, `tries=${waited.tries} waitedMs=${waited.waitedMs}`);
+
+const session = await run({ action: "session" });
+check("session orients in one call", session.ok === true && Array.isArray(session.hint) && session.hint.length > 0, `${session.hint && session.hint.length} hint(s)`);
 const closed = await run({ action: "kill", pid: Number(pid) });
 check("console closed", Boolean(closed.ok !== false), JSON.stringify(closed));
 

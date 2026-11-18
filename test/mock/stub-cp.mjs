@@ -87,6 +87,11 @@ function payload(cmd, o) {
         chars: 12, strategy: "uia", sources: [{ source: "uia", role: "Edit", via: "text", chars: 12 }],
         text: "hello world\n"
       };
+    case "waitocr":
+      return {
+        ok: true, matched: true, strategy: "ocr", waitedMs: 980, tries: 2,
+        chars: 42, regex: o.regex || ".*", text: "RA# show ip route\nO 192.168.1.0/24"
+      };
     case "waittext":
       return {
         ok: true, matched: true, waitedMs: 42, hwnd: Number(o.hwnd), strategy: "uia", chars: 12, text: "RA#"

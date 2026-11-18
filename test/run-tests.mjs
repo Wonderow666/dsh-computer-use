@@ -405,6 +405,44 @@ console.log("\n[ocr / frame quality / optional steps]");
   await t.execute({ action: "type", hwnd: "656368", text: "hi" }, {});
   check("the type action also switches layout first", () => eq(cp.calls.filter((c) => c.argv[0] === "ime").length, 1));
 }
+console.log("\n[session / ocr fallbacks]");
+{
+  const t = boot({ tesseract: "C:\\tools\\tesseract.exe" });
+  const s = text(await t.execute({ action: "session" }, {}));
+  check("session answers orientation in one call", () => {
+    eq(s.ok, true);
+    eq(s.locked, false);
+    eq(Array.isArray(s.hint), true);
+    assert.ok(s.hint.length >= 1, JSON.stringify(s.hint));
+  });
+  check("session reports the foreground and the modal count", () => {
+    eq(s.foreground.title, "DeepSeek Harness");
+    eq(typeof s.modals, "number");
+  });
+
+  const r1 = text(await t.execute({ action: "readtext", hwnd: "656368", ocr: true }, {}));
+  check("readtext falls back to ocr when asked", () => {
+    eq(r1.strategy, "ocr");
+    eq(callOf("ocr").length, 1);
+    eq(callOf("readtext").length, 0);
+  });
+
+  const r2 = text(await t.execute({ action: "waittext", hwnd: "656368", regex: "RA#", ocr: true, timeout: 3000 }, {}));
+  check("waittext can wait on the pixels", () => {
+    const a = callOf("waitocr").pop().argv;
+    eq(a[a.indexOf("--regex") + 1], "RA#");
+    eq(a[a.indexOf("--timeout") + 1], "3000");
+    eq(r2.matched, true);
+  });
+
+  cp.calls.length = 0;
+  await t.execute({ action: "run", hwnd: "999001", plan: "wait /RA#/ 2000 ocr\nread ocr" }, {});
+  check("a plan can wait and read on the pixels", () => {
+    eq(cp.calls.filter((c) => c.argv[0] === "waitocr").length, 1);
+    eq(cp.calls.filter((c) => c.argv[0] === "ocr").length >= 1, true);
+    eq(cp.calls.filter((c) => c.argv[0] === "waittext").length, 0);
+  });
+}
 console.log("\n[engine failure]");
 {
   const t = boot({ timeoutMs: 5000 });

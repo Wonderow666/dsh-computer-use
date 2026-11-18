@@ -50,12 +50,13 @@ dsh plugin --profile desktop add link:F:\path\to\dsh-computer-use
 
 重启后模型侧多出一个 `computer` 工具。插件配置在 `cordis.patch.yml`（`blockedProcesses`、`refuseFullscreenForeground`、`allowProcessControl`、`timeoutMs`、`enginePath`、`artifactsDir`），profile 自己的 `cordis.patch.yml` 可以按 id 覆盖这些字段。
 
-## 工具面（单一 `computer`，34 个 action）
+## 工具面（单一 `computer`，35 个 action）
 
 | 类别 | action | 返回 |
 | --- | --- | --- |
 | 预检 | `inputcheck` | 移动光标再复位，回报 `landed`/`integrity`/`locked`/`pointerDrifting` 与一句结论。**动手前先跑它** |
 | | **`state`** | 一次调用给出“我现在能不能动手”：`locked`/`lockAppRunning`/`privileged`/`foreground`/目标窗口 `geom`/**该应用的模态框计数**（实测 351–547 字节） |
+| | **`session`** | **开场一句话**：能否输入（`locked`/`privileged`）、前台是谁、模态框几个、配置了哪些 `targets`/`profiles`，外加该先干什么的 `hint`。一次调用替代 3–4 次探测 |
 | 观察 | `info` | 屏幕/虚拟桌面尺寸、每台显示器 dpi 与缩放、光标、前台窗口、`locked`、输入桌面名 |
 | | `windows` / `procs` | 顶层窗口（hwnd/title/class/process/pid/rect/foreground）或进程列表 |
 | | **`ui`** | **紧凑控件清单**：只列可操作控件（按钮/输入框/下拉/菜单/列表…）与短文本，带 `value`，默认 60 条上限。同一窗口比 `snapshot` 小 5–7 倍 |
@@ -67,7 +68,7 @@ dsh plugin --profile desktop add link:F:\path\to\dsh-computer-use
 | | `hover` | 移到目标控件驻留后读 UIA 的 name/helpText/acceleratorKey 与 `tooltips_class32` 文本 |
 | | **`ocr`** | **当应用根本不给文本时**从截图上读字（tesseract，默认 `chi_sim+eng`）。一次调用换回 `text`，省掉“截图→视觉模型”那条最贵的路。实测控制台 183 字 ≈ 1 秒 |
 | | **`readtext`** | 把窗口的文字读回来（UIA Text/Value → win32 `WM_GETTEXT` 兜底），返回 `text`/`strategy`/`sources` |
-| | **`waittext`** | 轮询 `readtext` 直到正则命中，返回 `matched`/`waitedMs`/`text`；超时给出已读到的尾部文本 |
+| | **`waittext`** | 轮询 `readtext` 直到正则命中，返回 `matched`/`waitedMs`/`text`；超时给出已读到的尾部文本。**加 `ocr: true` 改成轮询像素**（引擎 `waitocr`），自绘界面也能等 |
 | 批量 | **`run`** | **一次调用执行整份计划**（`wait`/`type`/`key`/`click`/`clickrel`/`invoke`/`read`/`shot`），只回每步一行 transcript；输入前自动置前；也可用 `profile` + `task` 重放存好的计划 |
 | 输入 | `click` `move` `scroll` `drag` | SendInput 注入，物理像素坐标；支持 `hwnd`/`title` 定位与 **`relx`/`rely`（客户区相对坐标）** |
 | | `type` `key` | Unicode 键入（中文安全）；**`type` 可加 `verify`** 回读校验；`key` 走组合键 `"ctrl+shift+s"` |
@@ -141,6 +142,50 @@ stopped at step 1 of 2
 - **单次动作一次进程调用**：无常驻服务，卡住也杀得掉，超时默认 30 s。
 - **`snapshot` 与 `find` 的元素 id 是同一套编号**（`0.2.1` 式控制视图路径），所以 `find` 找到控件后可以直接把它的 `id` 喂给 `invoke`，不用再走一遍像素点击。
 - **`dryRun: true`** 只解析 argv、不注入输入、不抢焦点，适合先看它打算干什么。
+
+## 等到像素说对了再往下走（v0.10.0）
+
+实训里最贵的一类往返是"打完命令 → 截图 → 猜有没有生效 → 再截图"。现在读和等都能直接落在像素上：
+
+```json
+{ "action": "readtext", "hwnd": "67970", "ocr": true }
+→ { "strategy": "ocr", "chars": 172, "text": "..." }
+
+{ "action": "waittext", "hwnd": "67970", "regex": "RA#", "ocr": true, "timeout": 20000 }
+→ { "matched": true, "tries": 1, "waitedMs": 968 }
+```
+
+计划里写成 `ocr` 后缀即可，可选步骤仍然是 `?`：
+
+```
+wait /Password:/ 15000 ocr
+type hhh666
+key enter
+wait? /RA>/ 8000 ocr
+read ocr
+```
+
+**代价**：一次 OCR 约 1 秒、几百 token 的文本；"截图 + 视觉模型"是 1–3k token。所以顺序永远是 `readtext` → `ocr` → `screenshot`。
+
+## 开场先问一句：`session`
+
+```json
+{ "action": "session" }
+→ {
+    "locked": false, "privileged": true,
+    "foreground": { "title": "Packet Tracer", "process": "PacketTracer.exe" },
+    "modals": 0,
+    "targets": ["centos7"],
+    "profiles": [{ "id": "pt", "plans": ["build-topology"] }],
+    "hint": [
+      "a task may live in another machine: targets = centos7 - prefer exec over pixels",
+      "the front window matches profile \"pt\": run {profile:\"pt\",task:\"build-topology\"} instead of clicking through it",
+      "when you do need pixels: readtext first, then ocr, then a screenshot"
+    ]
+  }
+```
+
+它把"我能不能动手 / 面前是谁 / 有什么现成的路"压成一次调用，省掉开场的三次探测。
 
 ## 当应用不给文本：`ocr`、帧体检与自动 IME（v0.9.0）
 
@@ -441,7 +486,7 @@ dsh-computer-use/
 ├─ bridge/cu.cs          # C# 桥源码（单文件，C# 5 语法，csc.exe 可编）
 ├─ bin/cu.exe            # 编译产物（随仓库提供，装完即用）
 ├─ build.ps1             # 重新编译（-Test 连测试夹具一起编）
-├─ test/                 # 78 项单测 + 只读/闭环脚本 + mock + WinForms 夹具
+├─ test/                 # 83 项单测 + 只读/闭环脚本 + mock + WinForms 夹具
 └─ docs/                 # README 用图
 ```
 

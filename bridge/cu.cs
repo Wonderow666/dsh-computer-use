@@ -252,6 +252,7 @@ static class Program
                 case "windows": Windows(c); break;
                 case "shot": Shot(c); break;
                 case "ocr": Ocr(c); break;
+            case "waitocr": WaitOcr(c); break;
                 case "tree": Tree(c); break;
                 case "ui": Ui(c); break;
                 case "find": Find(c); break;
@@ -318,6 +319,7 @@ static class Program
 "  windows [--all]               list top-level windows\n" +
 "  shot --out FILE [--hwnd H] [--region l,t,r,b] [--trim] [--tol N] [--pad N] [--min-bytes N] [--min-brightness N] [--min-stddev N] [--wake N] [--nocursor] [--printwindow]\n" +
 "  ocr [--hwnd H] [--region l,t,r,b] [--lang chi_sim+eng] [--psm 6] [--maxw N] [--keep FILE] [--tesseract EXE]  (text out of apps that expose none)\n" +
+"  waitocr --regex R [--timeout 8000] [--interval 400] [--hwnd H] [--region l,t,r,b] [--lang chi_sim+eng] [--psm 6] [--maxw N] [--tesseract EXE]  (wait until the pixels say it)\n" +
 "  readtext [--hwnd H] [--chars N]   read the window's text back (UIA text/value, else win32)\n" +
 "  waittext --regex R [--hwnd H] [--timeout MS]   poll readtext until the text matches\n" +
 "  tree [--hwnd H] [--depth N] [--max N]   UI Automation control-view tree with element ids\n" +
@@ -929,6 +931,137 @@ static class Program
         Emit(o.ToString());
     }
 
+    static Rectangle RectForOcr(Cmd c)
+    {
+        string region = c.Get("region", null);
+        if (region != null)
+        {
+            string[] p = region.Split(',');
+            if (p.Length == 4)
+            {
+                int l = int.Parse(p[0], CultureInfo.InvariantCulture), t = int.Parse(p[1], CultureInfo.InvariantCulture);
+                int r = int.Parse(p[2], CultureInfo.InvariantCulture), b = int.Parse(p[3], CultureInfo.InvariantCulture);
+                return new Rectangle(l, t, Math.Max(1, r - l), Math.Max(1, b - t));
+            }
+        }
+        string h = c.Get("hwnd", null);
+        if (h != null)
+        {
+            long hv;
+            if (long.TryParse(h, NumberStyles.Integer, CultureInfo.InvariantCulture, out hv))
+            {
+                IntPtr hw = new IntPtr(hv);
+                Native.RECT wr; Native.GetWindowRect(hw, out wr);
+                Native.RECT fr = wr;
+                try { Native.DwmGetWindowAttribute(hw, 9, out fr, Marshal.SizeOf(typeof(Native.RECT))); } catch { fr = wr; }
+                return new Rectangle(fr.Left, fr.Top, Math.Max(1, fr.Right - fr.Left), Math.Max(1, fr.Bottom - fr.Top));
+            }
+        }
+        return new Rectangle(Native.GetSystemMetrics(76), Native.GetSystemMetrics(77), Native.GetSystemMetrics(78), Native.GetSystemMetrics(79));
+    }
+
+    // One OCR read of a rectangle: capture, write a temp PNG, run tesseract.
+    // Kept separate from Ocr() so waitocr can poll the pixels without re-deriving
+    // the capture geometry on every attempt.
+    static string OcrTextOf(Rectangle rect, int maxw, string tess, string lang, int psm)
+    {
+        string tmp = Path.Combine(Path.GetTempPath(), "dsh-ocr-" + DateTime.Now.ToString("yyyyMMdd-HHmmss-fff", CultureInfo.InvariantCulture) + ".png");
+        try
+        {
+            using (Bitmap bmp = Grab(rect, IntPtr.Zero, false))
+            {
+                if (maxw > 0 && bmp.Width > maxw)
+                {
+                    int h2 = (int)Math.Round(bmp.Height * (maxw / (double)bmp.Width));
+                    using (Bitmap small = new Bitmap(maxw, h2))
+                    {
+                        using (Graphics g = Graphics.FromImage(small))
+                        {
+                            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                            g.DrawImage(bmp, 0, 0, maxw, h2);
+                        }
+                        small.Save(tmp, ImageFormat.Png);
+                    }
+                }
+                else bmp.Save(tmp, ImageFormat.Png);
+            }
+            ProcessStartInfo psi = new ProcessStartInfo();
+            psi.FileName = tess;
+            psi.Arguments = "\"" + tmp + "\" stdout -l " + lang + " --psm " + psm.ToString(CultureInfo.InvariantCulture);
+            psi.UseShellExecute = false;
+            psi.CreateNoWindow = true;
+            psi.RedirectStandardOutput = true;
+            psi.RedirectStandardError = true;
+            psi.StandardOutputEncoding = new UTF8Encoding(false);
+            psi.StandardErrorEncoding = new UTF8Encoding(false);
+            string text = "";
+            using (Process proc = Process.Start(psi))
+            {
+                text = proc.StandardOutput.ReadToEnd();
+                try { proc.StandardError.ReadToEnd(); } catch { }
+                if (!proc.WaitForExit(120000)) { try { proc.Kill(); } catch { } }
+            }
+            return (text == null ? "" : text).Replace("\r\n", "\n").Trim();
+        }
+        finally
+        {
+            try { File.Delete(tmp); } catch { }
+        }
+    }
+
+    // waitocr: wait until the pixels say what you expect. This is the escape hatch
+    // for windows that expose no text at all (self-drawn terminals, Qt canvases):
+    // one call instead of "screenshot, sleep, screenshot, ask a vision model".
+    static void WaitOcr(Cmd c)
+    {
+        string pattern = c.Get("regex", null);
+        if (pattern == null || pattern.Length == 0) { Err("waitocr needs --regex"); return; }
+        Regex rx;
+        try { rx = new Regex(pattern); } catch (Exception ex) { Err("bad --regex: " + ex.Message); return; }
+        int timeout = c.I("timeout", 8000);
+        int interval = Math.Max(100, c.I("interval", 400));
+        string tess = c.Get("tesseract", null);
+        if (tess == null || tess.Length == 0) tess = Environment.GetEnvironmentVariable("DSH_TESSERACT");
+        if (tess == null || tess.Length == 0) tess = "tesseract";
+        string lang = c.Get("lang", "chi_sim+eng");
+        int psm = c.I("psm", 6);
+        int maxw = c.I("maxw", 1600);
+        Rectangle rect = RectForOcr(c);
+        int started = Environment.TickCount;
+        string text = "";
+        int tries = 0;
+        bool matched = false;
+        try
+        {
+            while (true)
+            {
+                tries++;
+                text = OcrTextOf(rect, maxw, tess, lang, psm);
+                matched = rx.IsMatch(text);
+                if (matched) break;
+                if (Environment.TickCount - started >= timeout) break;
+                Thread.Sleep(interval);
+            }
+        }
+        catch (Exception ex)
+        {
+            Err("could not read the screen with tesseract at \"" + tess + "\": " + ex.Message + " - install it, or pass --tesseract <path> / set DSH_TESSERACT");
+            return;
+        }
+        int waited = Environment.TickCount - started;
+        string tail = text.Length > 1200 ? text.Substring(text.Length - 1200) : text;
+        StringBuilder o = new StringBuilder();
+        o.Append("{\"ok\":").Append(matched ? "true" : "false");
+        o.Append(",\"matched\":").Append(matched ? "true" : "false");
+        o.Append(",\"strategy\":\"ocr\",\"waitedMs\":").Append(waited);
+        o.Append(",\"tries\":").Append(tries);
+        o.Append(",\"chars\":").Append(text.Length);
+        o.Append(",\"regex\":").Append(J.S(pattern));
+        if (!matched) o.Append(",\"error\":").Append(J.S("the screen text did not match /" + pattern + "/ within " + timeout + "ms (" + tries + " reads)"));
+        o.Append(",\"text\":").Append(J.S(tail));
+        o.Append('}');
+        Emit(o.ToString());
+    }
     // ---------------- UIA tree ----------------
 
     static string RectOf(AutomationElement e)
