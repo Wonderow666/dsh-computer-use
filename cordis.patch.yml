@@ -54,12 +54,20 @@
         #     user: root
         #     password: "123456"
         #     timeoutMs: 180000
-        #   # Any reachable POSIX host with sshd.
+        #   # Any reachable host with sshd.
         #   rhel8:
         #     type: ssh
         #     host: 10.10.177.222
         #     user: root
         #     key: C:\Users\you\.ssh\id_ed25519
+        #   # A Windows guest: say so, and exec wraps in cmd.exe / PowerShell.
+        #   winbox:
+        #     type: vmware
+        #     vmrun: D:\LINUX666\vmrun.exe
+        #     vmx: D:\vms\Windows 10 x64.vmx
+        #     user: Administrator
+        #     password: "***"
+        #     shell: windows          # posix | windows（省略则按 vmx 名字猜）
         # App profiles: the "how do I drive this program" knowledge as data.
         # Once a profile exists, `run` can replay it and `state` names it when
         # its window is in front - the plan never mentions a hwnd.

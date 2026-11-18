@@ -72,6 +72,8 @@
 
 ### 2.9 先找可执行通道，再考虑界面
 
+Window 客户机别忘写 `shell: windows`：这样 `exec` 会走 `cmd.exe /c` + `.cmd` 包装（`put`/`get` 走 PowerShell 的 stdin/stdout），退出码才是客户机的真实退出码。
+
 任务落在**另一台机器**（虚拟机、远程主机）时，第一件事不是截图，是问“能不能直接跑命令”：
 
 - `targets` 看有没有配好的目标（VMware 虚拟机走 Tools，Linux 主机走 ssh）。

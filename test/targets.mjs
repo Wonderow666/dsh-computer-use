@@ -17,6 +17,7 @@ import {
   vmrunArgv,
   shellQuote,
   tailClip,
+  targetShell,
   DEFAULT_MAX_CHARS
 } from "../lib/targets.js";
 import { loadTool } from "./_harness.mjs";
@@ -53,13 +54,15 @@ function fakeVmrun(calls, guestFiles) {
     if (sub === "runProgramInGuest") {
       // the guest would have executed the wrapper; emulate what it writes back
       const wrapper = argv[argv.length - 1];
-      const outPath = />>?\s*'([^']+\.out)'/.exec(wrapper) || />>?\s*([^\s;]+\.out)/.exec(wrapper);
+      const winScript = /^"([^"]+\.cmd)"/.exec(wrapper);
+      const outPath = />>?\s*'([^']+\.out)'/.exec(wrapper) || />>?\s*"([^"]+\.out)"/.exec(wrapper) || />>?\s*([^\s;]+\.out)/.exec(wrapper);
       const rcPath = /echo \$[?]\s*>\s*'?([^'\s;]+\.rc)'?/.exec(wrapper);
       const scriptPath = /^bash '([^']+)'/.exec(wrapper);
-      const script = scriptPath ? guestFiles.get(scriptPath[1]) || "" : "";
+      const script = scriptPath ? guestFiles.get(scriptPath[1]) || "" : winScript ? guestFiles.get(winScript[1]) || "" : "";
       const body = guestFiles.has("__stdout__") ? guestFiles.get("__stdout__") : `ran: ${script.trim()}`;
       if (outPath) guestFiles.set(outPath[1], body);
       if (rcPath) guestFiles.set(rcPath[1], `${guestFiles.get("__rc__") ?? 0}\n`);
+      if (winScript) guestFiles.set(winScript[1].replace(/\.cmd$/, ".rc"), `${guestFiles.get("__rc__") ?? 0}\n`);
       return { code: 0, out: "", err: "", ms: 12 };
     }
     return { code: 0, out: "", err: "", ms: 1 };
@@ -157,6 +160,63 @@ check("targets listing is spawn-free and descriptive",
   fs.writeFileSync(local, "hello\n");
   const r = await client.put("rhel8", { local, remote: "/tmp/push.txt" });
   check("ssh put streams the bytes over stdin", Buffer.isBuffer(calls[0].opts.stdin) && calls[0].opts.stdin.toString() === "hello\n" && r.bytes === 6);
+}
+
+// --- windows guests --------------------------------------------------------
+const decodePs = (remote) => {
+  const m = /^powershell -NoProfile -NonInteractive -EncodedCommand (.+)$/.exec(remote);
+  return m ? Buffer.from(m[1], "base64").toString("utf16le") : "";
+};
+{
+  const winbox = { type: "vmware", vmx: "D:\\vms\\Windows 10 x64.vmx", vmrun: "D:\\LINUX666\\vmrun.exe", user: "Administrator", password: "pw" };
+  check("a Windows vmx name is detected as a cmd guest", targetShell(winbox) === "windows");
+  check("an explicit shell wins over the guess", targetShell({ ...winbox, shell: "posix" }) === "posix");
+  check("the targets listing says which shell each guest speaks",
+    listTargets({ targets: { win: winbox, cloud: vm } }).map((t) => t.shell).join(",") === "windows,posix");
+
+  const calls = [];
+  const guestFiles = new Map([["__stdout__", "Volume in drive C has no label.\n"]]);
+  const client = makeTargetClient({ cfg: { targets: { win: winbox } }, runProcess: fakeVmrun(calls, guestFiles), workdir: work });
+  const r = await client.exec("win", { command: "vol", cwd: "C:\\Tools" });
+  const runCall = calls.find((c) => c.includes("runProgramInGuest"));
+  const wrapper = runCall[runCall.length - 1];
+  check("vmware runs a .cmd wrapper through cmd.exe", runCall.includes("C:\\Windows\\System32\\cmd.exe") && runCall.includes("-c") && /^"[^"]+\.cmd"/.test(wrapper), wrapper);
+  check("the .cmd wrapper starts with @echo off and records ERRORLEVEL",
+    (() => { const body = [...guestFiles.entries()].find(([k]) => k.endsWith(".cmd")); return Boolean(body) && body[1].startsWith("@echo off") && body[1].includes("echo %ERRORLEVEL% > "); })(),
+    (() => { const body = [...guestFiles.entries()].find(([k]) => k.endsWith(".cmd")); return body ? body[1].replace(/\r?\n/g, " ⏎ ").slice(0, 90) : "(no .cmd)"; })());
+  check("a Windows guest still returns stdout and exit 0", r.stdout.includes("Volume in drive C") && r.ok === true && r.exitCode === 0);
+  check("the temp .cmd is cleaned up", !fs.readdirSync(work).some((f) => f.endsWith(".cmd")));
+}
+{
+  const winssh = { type: "ssh", host: "10.0.0.9", user: "Administrator", shell: "windows" };
+  const calls = [];
+  const client = makeTargetClient({
+    cfg: { targets: { winssh } },
+    runProcess: async (argv, opts) => { calls.push({ argv, opts }); return { code: 0, out: "ok\n", err: "", ms: 2 }; }
+  });
+  await client.exec("winssh", { command: "dir C:\\", cwd: "C:\\Tools" });
+  const ps = decodePs(calls[0].argv.slice(-1)[0]);
+  check("windows ssh runs the command through PowerShell -EncodedCommand",
+    ps.includes("Set-Location -LiteralPath 'C:\\Tools'") && ps.includes("dir C:\\") && ps.includes("$LASTEXITCODE"), ps);
+  check("windows ssh keeps the exit code in a PowerShell-friendly way", ps.trim().endsWith("exit $c"));
+}
+{
+  const winssh = { type: "ssh", host: "10.0.0.9", user: "Administrator", shell: "windows" };
+  const buf = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff]);
+  const calls = [];
+  const client = makeTargetClient({
+    cfg: { targets: { winssh } },
+    runProcess: async (argv, opts) => { calls.push({ argv, opts }); return { code: 0, out: buf, err: "", ms: 2 }; }
+  });
+  const local = path.join(work, "win-pull.bin");
+  const g = await client.get("winssh", { remote: "C:\\Temp\\x.png", local });
+  check("windows ssh get streams binary through stdout", decodePs(calls[0].argv.slice(-1)[0]).includes("OpenStandardOutput") && fs.readFileSync(local).equals(buf) && g.bytes === buf.length);
+  const pushLocal = path.join(work, "win-push.txt");
+  fs.writeFileSync(pushLocal, "hello\n");
+  const p = await client.put("winssh", { local: pushLocal, remote: "C:\\Temp\\push.txt" });
+  const putPs = decodePs(calls[1].argv.slice(-1)[0]);
+  check("windows ssh put streams the bytes in and creates the directory",
+    putPs.includes("OpenStandardInput") && putPs.includes("GetParent") && Buffer.isBuffer(calls[1].opts.stdin) && p.bytes === 6, putPs.slice(0, 90));
 }
 
 // --- the tool surface ------------------------------------------------------

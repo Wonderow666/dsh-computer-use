@@ -322,6 +322,28 @@ targets:
 - 目前 vmware 后端假设 guest 是 POSIX（`/bin/bash`）。Windows guest 需要 `cmd`/`powershell` 版的包装器，还没做——那种机器仍然走 GUI，或用 guest 里自己开的 ssh。
 - 没有 Tools、也不通 ssh 的虚拟机（比如刚装完没配网络的），`exec` 会直接报错并说明；这时再退回 `targets` 之外的 GUI 动作。
 
+### Windows 客户机（v0.13.0）
+
+以前 `targets` 只假设客户机是 POSIX。现在每个目标可以说明它说的是哪种 shell：
+
+```yaml
+targets:
+  winbox:
+    type: vmware
+    vmx: D:\vms\Windows 10 x64.vmx
+    vmrun: D:\LINUX666\vmrun.exe
+    user: Administrator
+    password: "***"
+    shell: windows          # posix | windows；不写就按 vmx 名字猜
+```
+
+- **vmware + windows**：命令写进 `C:\Windows\Temp\dsh-<id>.cmd`，`@echo off` 开头、末尾 `echo %ERRORLEVEL% > ...rc`，再用 `cmd.exe /c` 跑它——和 POSIX 版一样拿到**客户机真实退出码**，而不是"vmrun 自己成功"。
+- **ssh + windows**：不拼命令行，改用 `powershell -NoProfile -NonInteractive -EncodedCommand <base64>`（UTF-16LE），彻底绕开引号地狱；`cwd` 用 `Set-Location -LiteralPath`，退出码用 `$LASTEXITCODE` 兜底为 0。
+- **put / get + ssh + windows**：二进制走标准输入/输出（`[Console]::OpenStandardInput()` / `OpenStandardOutput()`），所以 `.png`、`.zip` 不会在 PowerShell 管道里被当文本改坏；`put` 还会顺带建目录。
+- `action: "targets"` 现在会回报每个目标的 `shell`，一眼看出它按 POSIX 还是 cmd 处理。
+
+不知该写哪个？`shell` 省略时会看 vmx 名字里有没有 `Windows` / `Win10` 之类；拿不准就明确写上，猜错只会得到一条明确的失败，不会静默跑错。
+
 ## 应用画像：把"这个软件怎么用"变成数据（v0.8.0）
 
 引擎和协议是通用的，但**每个软件的知识不通用**：窗口怎么认、那个按钮叫什么、这套步骤上次是怎么走通的。放在一次性脚本里，换个软件就要重写一遍；写进配置，就变成"换软件只写 JSON"。
