@@ -251,6 +251,7 @@ static class Program
                 case "info": Info(); break;
                 case "windows": Windows(c); break;
                 case "shot": Shot(c); break;
+                case "ocr": Ocr(c); break;
                 case "tree": Tree(c); break;
                 case "ui": Ui(c); break;
                 case "find": Find(c); break;
@@ -315,7 +316,8 @@ static class Program
 "commands:\n" +
 "  info                          monitors, dpi, cursor, foreground window\n" +
 "  windows [--all]               list top-level windows\n" +
-"  shot --out FILE [--hwnd H] [--region l,t,r,b] [--trim] [--tol N] [--pad N] [--min-bytes N] [--nocursor] [--printwindow]\n" +
+"  shot --out FILE [--hwnd H] [--region l,t,r,b] [--trim] [--tol N] [--pad N] [--min-bytes N] [--min-brightness N] [--min-stddev N] [--wake N] [--nocursor] [--printwindow]\n" +
+"  ocr [--hwnd H] [--region l,t,r,b] [--lang chi_sim+eng] [--psm 6] [--maxw N] [--keep FILE] [--tesseract EXE]  (text out of apps that expose none)\n" +
 "  readtext [--hwnd H] [--chars N]   read the window's text back (UIA text/value, else win32)\n" +
 "  waittext --regex R [--hwnd H] [--timeout MS]   poll readtext until the text matches\n" +
 "  tree [--hwnd H] [--depth N] [--max N]   UI Automation control-view tree with element ids\n" +
@@ -568,6 +570,86 @@ static class Program
 
     // ---------------- screenshot ----------------
 
+    static Bitmap Grab(Rectangle rect, IntPtr hwnd, bool printWindow)
+    {
+        Bitmap bmp = new Bitmap(rect.Width, rect.Height, PixelFormat.Format32bppArgb);
+        bool captured = false;
+        if (printWindow && hwnd != IntPtr.Zero)
+        {
+            using (Graphics g = Graphics.FromImage(bmp))
+            {
+                IntPtr hdc = g.GetHdc();
+                try { captured = PrintWindow(hwnd, hdc, 2); }
+                finally { g.ReleaseHdc(hdc); }
+            }
+        }
+        if (!captured)
+        {
+            using (Graphics g = Graphics.FromImage(bmp))
+            {
+                g.CopyFromScreen(rect.Left, rect.Top, 0, 0, rect.Size, CopyPixelOperation.SourceCopy);
+            }
+        }
+        return bmp;
+    }
+
+    // Mean luminance and contrast of a frame. A capture of a sleeping display, a
+    // suspended console or a hidden window is uniformly dark, which --min-bytes
+    // cannot catch: a 1280x768 all-black PNG still weighs about 37 KB.
+    static void ImageStats(Bitmap bmp, out double mean, out double contrast)
+    {
+        mean = 0; contrast = 0;
+        int w = bmp.Width, h = bmp.Height;
+        if (w < 1 || h < 1) return;
+        BitmapData d = null;
+        try { d = bmp.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb); }
+        catch { return; }
+        try
+        {
+            int stride = d.Stride;
+            byte[] buf = new byte[stride * h];
+            Marshal.Copy(d.Scan0, buf, 0, buf.Length);
+            long sum = 0, sum2 = 0;
+            int n = 0;
+            int stepX = Math.Max(1, w / 320);
+            int stepY = Math.Max(1, h / 200);
+            for (int y = 0; y < h; y += stepY)
+            {
+                int row = y * stride;
+                for (int x = 0; x < w; x += stepX)
+                {
+                    int i = row + x * 4;
+                    int lum = (buf[i + 2] * 299 + buf[i + 1] * 587 + buf[i] * 114) / 1000;
+                    sum += lum;
+                    sum2 += (long)lum * lum;
+                    n++;
+                }
+            }
+            if (n > 0)
+            {
+                mean = sum / (double)n;
+                double var = sum2 / (double)n - mean * mean;
+                contrast = var > 0 ? Math.Sqrt(var) : 0;
+            }
+        }
+        finally { if (d != null) { try { bmp.UnlockBits(d); } catch { } } }
+    }
+
+    // A 2px pointer wiggle is enough to reset the idle timer on most desktops and
+    // wakes a blanked VM console before the next capture.
+    static void Wake()
+    {
+        try
+        {
+            Native.POINT p;
+            Native.GetCursorPos(out p);
+            Native.SetCursorPos(p.X + 2, p.Y);
+            Thread.Sleep(70);
+            Native.SetCursorPos(p.X, p.Y);
+        }
+        catch { }
+    }
+
     static void Shot(Cmd c)
     {
         string outp = c.Get("out", null);
@@ -603,6 +685,15 @@ static class Program
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outp)));
         int savedW = rect.Width, savedH = rect.Height;
         int trimX = 0, trimY = 0, trimW = 0, trimH = 0;
+        int minBrightness = c.I("min-brightness", -1);
+        int minStddev = c.I("min-stddev", -1);
+        int tries = 1 + Math.Max(0, c.I("wake", 0));
+        double mean = 0, contrast = 0;
+        bool dim = false;
+        int attempt = 0;
+        for (attempt = 1; attempt <= tries; attempt++)
+        {
+        if (attempt > 1) { Wake(); Thread.Sleep(320); }
         using (Bitmap bmp = new Bitmap(rect.Width, rect.Height, PixelFormat.Format32bppArgb))
         {
             bool captured = false;
@@ -622,6 +713,9 @@ static class Program
                     g.CopyFromScreen(rect.Left, rect.Top, 0, 0, rect.Size, CopyPixelOperation.SourceCopy);
                 }
             }
+            ImageStats(bmp, out mean, out contrast);
+            dim = (minBrightness >= 0 && mean < minBrightness) || (minStddev >= 0 && contrast < minStddev);
+            if (dim && attempt < tries) continue;
             Bitmap work = bmp;
             int offX = 0, offY = 0;
             if (c.Has("trim"))
@@ -682,6 +776,13 @@ static class Program
                 work.Dispose();
             }
         }
+        break;
+        }
+        if (dim)
+        {
+            Err("the frame looks blank: mean brightness " + (int)mean + " (need >= " + minBrightness + "), contrast " + (int)contrast + " (need >= " + minStddev + ") after " + tries + " capture(s). The display or a remote console is asleep, or the window is hidden - wake it (a click, or `inputcheck`) and retry");
+            return;
+        }
         Native.POINT pc; Native.GetCursorPos(out pc);
         long bytes = 0;
         try { bytes = new FileInfo(outp).Length; } catch { }
@@ -697,6 +798,7 @@ static class Program
         StringBuilder o = new StringBuilder();
         o.Append("{\"ok\":true,\"path\":").Append(J.S(Path.GetFullPath(outp)));
         o.Append(",\"bytes\":").Append(bytes);
+        o.Append(",\"mean\":").Append((int)mean).Append(",\"contrast\":").Append((int)contrast);
         o.Append(",\"x\":").Append(rect.Left).Append(",\"y\":").Append(rect.Top);
         o.Append(",\"w\":").Append(savedW).Append(",\"h\":").Append(savedH);
         o.Append(",\"srcW\":").Append(rect.Width).Append(",\"srcH\":").Append(rect.Height);
@@ -710,6 +812,122 @@ static class Program
     }
 
     [DllImport("user32.dll")] static extern bool PrintWindow(IntPtr h, IntPtr hdc, uint flags);
+
+    // Text that the app refuses to expose through UI Automation (Qt canvases, VM
+    // consoles, remote desktops, games) still exists as pixels. OCR is the fallback
+    // that keeps the loop cheap: one text answer instead of shipping an image into
+    // a vision model.
+    static void Ocr(Cmd c)
+    {
+        string keep = c.Get("keep", null);
+        string tess = c.Get("tesseract", null);
+        if (tess == null || tess.Length == 0) tess = Environment.GetEnvironmentVariable("DSH_TESSERACT");
+        if (tess == null || tess.Length == 0) tess = "tesseract";
+        Rectangle rect;
+        string hwndStr = c.Get("hwnd", null);
+        string region = c.Get("region", null);
+        if (region != null)
+        {
+            string[] p = region.Split(',');
+            if (p.Length != 4) { Err("--region needs l,t,r,b"); return; }
+            int l = int.Parse(p[0], CultureInfo.InvariantCulture), t = int.Parse(p[1], CultureInfo.InvariantCulture);
+            rect = new Rectangle(l, t, int.Parse(p[2], CultureInfo.InvariantCulture) - l, int.Parse(p[3], CultureInfo.InvariantCulture) - t);
+        }
+        else if (hwndStr != null)
+        {
+            long hv;
+            if (!long.TryParse(hwndStr, NumberStyles.Integer, CultureInfo.InvariantCulture, out hv)) { Err("bad --hwnd"); return; }
+            IntPtr hw = new IntPtr(hv);
+            Native.RECT r; Native.GetWindowRect(hw, out r);
+            Native.RECT fr = r;
+            try { Native.DwmGetWindowAttribute(hw, 9, out fr, Marshal.SizeOf(typeof(Native.RECT))); } catch { fr = r; }
+            rect = new Rectangle(fr.Left, fr.Top, Math.Max(1, fr.Right - fr.Left), Math.Max(1, fr.Bottom - fr.Top));
+        }
+        else
+        {
+            rect = new Rectangle(Native.GetSystemMetrics(76), Native.GetSystemMetrics(77), Native.GetSystemMetrics(78), Native.GetSystemMetrics(79));
+        }
+        if (rect.Width <= 0 || rect.Height <= 0) { Err("empty capture rect"); return; }
+
+        string tmp = keep;
+        bool temp = false;
+        if (tmp == null)
+        {
+            tmp = Path.Combine(Path.GetTempPath(), "dsh-ocr-" + DateTime.Now.ToString("yyyyMMdd-HHmmss-fff", CultureInfo.InvariantCulture) + ".png");
+            temp = true;
+        }
+        else
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(tmp)));
+        }
+        using (Bitmap bmp = Grab(rect, IntPtr.Zero, false))
+        {
+            int maxw = c.I("maxw", 0);
+            if (maxw > 0 && bmp.Width > maxw)
+            {
+                int h2 = (int)Math.Round(bmp.Height * (maxw / (double)bmp.Width));
+                using (Bitmap small = new Bitmap(maxw, h2))
+                {
+                    using (Graphics g = Graphics.FromImage(small))
+                    {
+                        g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                        g.DrawImage(bmp, 0, 0, maxw, h2);
+                    }
+                    small.Save(tmp, ImageFormat.Png);
+                }
+            }
+            else bmp.Save(tmp, ImageFormat.Png);
+        }
+
+        string lang = c.Get("lang", "chi_sim+eng");
+        int psm = c.I("psm", 6);
+        ProcessStartInfo psi = new ProcessStartInfo();
+        psi.FileName = tess;
+        psi.Arguments = "\"" + tmp + "\" stdout -l " + lang + " --psm " + psm.ToString(CultureInfo.InvariantCulture);
+        psi.UseShellExecute = false;
+        psi.CreateNoWindow = true;
+        psi.RedirectStandardOutput = true;
+        psi.RedirectStandardError = true;
+        psi.StandardOutputEncoding = new UTF8Encoding(false);
+        psi.StandardErrorEncoding = new UTF8Encoding(false);
+        int started = Environment.TickCount;
+        string text = "", stderr = "";
+        int code = 0;
+        try
+        {
+            using (Process p = Process.Start(psi))
+            {
+                text = p.StandardOutput.ReadToEnd();
+                stderr = p.StandardError.ReadToEnd();
+                if (!p.WaitForExit(120000)) { try { p.Kill(); } catch { } }
+                try { code = p.ExitCode; } catch { }
+            }
+        }
+        catch (Exception ex)
+        {
+            if (temp) { try { File.Delete(tmp); } catch { } }
+            Err("could not run tesseract at \"" + tess + "\": " + ex.Message + " - install it, or pass --tesseract <path> / set DSH_TESSERACT");
+            return;
+        }
+        int ms = Environment.TickCount - started;
+        if (temp) { try { File.Delete(tmp); } catch { } }
+        if (code != 0 && (text == null || text.Trim().Length == 0))
+        {
+            Err("tesseract exited " + code + " without text: " + (stderr == null ? "" : stderr.Trim()));
+            return;
+        }
+        text = (text == null ? "" : text).Replace("\r\n", "\n").Trim();
+        StringBuilder o = new StringBuilder();
+        o.Append("{\"ok\":true,\"text\":").Append(J.S(text));
+        o.Append(",\"chars\":").Append(text.Length);
+        o.Append(",\"region\":{\"x\":").Append(rect.Left).Append(",\"y\":").Append(rect.Top)
+         .Append(",\"w\":").Append(rect.Width).Append(",\"h\":").Append(rect.Height).Append('}');
+        o.Append(",\"lang\":").Append(J.S(lang)).Append(",\"psm\":").Append(psm);
+        o.Append(",\"ms\":").Append(ms);
+        if (keep != null) o.Append(",\"path\":").Append(J.S(Path.GetFullPath(keep)));
+        o.Append('}');
+        Emit(o.ToString());
+    }
 
     // ---------------- UIA tree ----------------
 
@@ -2327,6 +2545,33 @@ static class Program
                     title = WindowTitle(h);
                 }
             }
+        }
+        // A console app window belongs to conhost.exe, not to the process we started,
+        // so both lookups above find nothing. Adopt the console host that just took
+        // the foreground if its title names the program we launched.
+        if (hwnd == 0)
+        {
+            try
+            {
+                IntPtr fgw = Native.GetForegroundWindow();
+                if (fgw != IntPtr.Zero)
+                {
+                    int fpid = 0;
+                    Native.GetWindowThreadProcessId(fgw, out fpid);
+                    string pname = ProcNameOf(fpid);
+                    string ftitle = WindowTitle(fgw);
+                    bool consoleHost = string.Equals(pname, "conhost.exe", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(pname, "OpenConsole.exe", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(pname, "WindowsTerminal.exe", StringComparison.OrdinalIgnoreCase);
+                    string exeName = Path.GetFileName(path);
+                    if (consoleHost && (ftitle.Length == 0 || ftitle.IndexOf(exeName, StringComparison.OrdinalIgnoreCase) >= 0 || string.Equals(ftitle, path, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        hwnd = fgw.ToInt64();
+                        title = ftitle;
+                    }
+                }
+            }
+            catch { }
         }
         Emit("{\"ok\":true,\"path\":" + J.S(path) + ",\"pid\":" + pid + ",\"hwnd\":" + hwnd + ",\"title\":" + J.S(title) + "}");
     }

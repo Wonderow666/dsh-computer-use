@@ -20,9 +20,10 @@ function check(name, cond, detail) {
 }
 
 const { run } = await loadTool();
+const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname).replace(/^\//, ""), "..");
 
 // 1. a window that answers with text: the console
-const launched = await run({ action: "launch", path: "C:\\Windows\\System32\\cmd.exe" });
+const launched = await run({ action: "launch", path: "C:\\Windows\\System32\\cmd.exe", cwd: ROOT });
 const pid = launched.pid;
 console.log(`launched cmd.exe pid=${pid} hwnd=${launched.hwnd}`);
 

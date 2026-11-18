@@ -41,7 +41,11 @@ jobs:
         run: node test/targets.mjs
 
       # Profiles are pure data manipulation plus the mocked tool surface.
-      - name: App profile tests
+      - name: Text, OCR and frame gates
+  # ocr.mjs skips itself when tesseract is missing; the run-readtext parts still assert.
+  run: node test/ocr.mjs
+
+- name: App profile tests
         shell: pwsh
         run: node test/profiles.mjs
 

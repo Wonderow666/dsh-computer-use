@@ -354,6 +354,57 @@ console.log("\n[state / ui / run]");
   check("run can read the plan from a file", () => /done 2\/2/.test(fromFile.text));
 }
 
+console.log("\n[ocr / frame quality / optional steps]");
+{
+  const t = boot({ tesseract: "C:\\tools\\tesseract.exe" });
+  const r = text(await t.execute({ action: "ocr", hwnd: "656368", psm: 4, lang: "eng", region: "0,0,800,600" }, {}));
+  check("ocr forwards window, region, lang and psm", () => {
+    const a = callOf("ocr")[0].argv;
+    eq(a[a.indexOf("--hwnd") + 1], "656368");
+    eq(a[a.indexOf("--region") + 1], "0,0,800,600");
+    eq(a[a.indexOf("--lang") + 1], "eng");
+    eq(a[a.indexOf("--psm") + 1], "4");
+    eq(a[a.indexOf("--tesseract") + 1], "C:\\tools\\tesseract.exe");
+    eq(r.chars, 18);
+  });
+  const r2 = text(await t.execute({ action: "ocr", hwnd: "656368", tesseract: "D:\\t.exe" }, {}));
+  check("ocr lets the call override the configured tesseract path", () => {
+    const a = callOf("ocr").pop().argv;
+    eq(a[a.indexOf("--tesseract") + 1], "D:\\t.exe");
+    eq(r2.ok, true);
+  });
+
+  const s = text(await t.execute({ action: "screenshot", hwnd: "656368", minBrightness: 20, minStddev: 6, wake: 2 }, {}));
+  check("screenshot forwards brightness, contrast and wake gates", () => {
+    const a = callOf("shot").pop().argv;
+    eq(a[a.indexOf("--min-brightness") + 1], "20");
+    eq(a[a.indexOf("--min-stddev") + 1], "6");
+    eq(a[a.indexOf("--wake") + 1], "2");
+    eq(s.mean, 180);
+  });
+
+  const plan = "wait /nothing/ 200\ntype hello";
+  cp.state.failNext = "waittext";
+  const proc = await t.execute({ action: "run", hwnd: "999001", plan: plan.replace("wait ", "wait? ") }, {});
+  check("an optional step records its failure and the plan continues", () => {
+    assert.ok(/skipped \(optional\)/.test(proc.text), proc.text);
+    assert.ok(/done 2\/2/.test(proc.text), proc.text);
+  });
+
+  cp.calls.length = 0;
+  await t.execute({ action: "run", hwnd: "999001", plan: "type hi" }, {});
+  check("run switches the target to an English layout before typing", () => {
+    eq(cp.calls.filter((c) => c.argv[0] === "ime").length, 1);
+    eq(cp.calls.filter((c) => c.argv[0] === "type").length, 1);
+  });
+  cp.calls.length = 0;
+  const off = boot({ autoIme: false });
+  await off.execute({ action: "run", hwnd: "999001", plan: "type hi" }, {});
+  check("autoIme:false leaves the keyboard layout alone", () => eq(cp.calls.filter((c) => c.argv[0] === "ime").length, 0));
+  cp.calls.length = 0;
+  await t.execute({ action: "type", hwnd: "656368", text: "hi" }, {});
+  check("the type action also switches layout first", () => eq(cp.calls.filter((c) => c.argv[0] === "ime").length, 1));
+}
 console.log("\n[engine failure]");
 {
   const t = boot({ timeoutMs: 5000 });

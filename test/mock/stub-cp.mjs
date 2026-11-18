@@ -63,9 +63,18 @@ function payload(cmd, o) {
     }
     case "windows":
       return { ok: true, count: state.windows.length, foreground: state.foreground, windows: state.windows };
+    case "ocr":
+      return {
+        ok: true, text: "RA# show ip route", chars: 18, ms: 7,
+        region: { x: 0, y: 0, w: 800, h: 600 },
+        lang: o.lang || "chi_sim+eng", psm: Number(o.psm || 6)
+      };
+    case "ime":
+      return { ok: true, action: "ime", layout: "en-US" };
     case "shot":
       return {
         ok: true, path: o.out, x: 0, y: 0,
+        mean: o["min-brightness"] ? 180 : 16, contrast: 24,
         bytes: o["min-bytes"] ? 480426 : 3120,
         w: Number(o.maxw || 1600), h: Math.round(Number(o.maxw || 1600) * 1600 / 2560),
         srcW: 2560, srcH: 1600,

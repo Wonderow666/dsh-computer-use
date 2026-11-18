@@ -50,7 +50,7 @@ dsh plugin --profile desktop add link:F:\path\to\dsh-computer-use
 
 重启后模型侧多出一个 `computer` 工具。插件配置在 `cordis.patch.yml`（`blockedProcesses`、`refuseFullscreenForeground`、`allowProcessControl`、`timeoutMs`、`enginePath`、`artifactsDir`），profile 自己的 `cordis.patch.yml` 可以按 id 覆盖这些字段。
 
-## 工具面（单一 `computer`，35 个 action）
+## 工具面（单一 `computer`，34 个 action）
 
 | 类别 | action | 返回 |
 | --- | --- | --- |
@@ -59,12 +59,13 @@ dsh plugin --profile desktop add link:F:\path\to\dsh-computer-use
 | 观察 | `info` | 屏幕/虚拟桌面尺寸、每台显示器 dpi 与缩放、光标、前台窗口、`locked`、输入桌面名 |
 | | `windows` / `procs` | 顶层窗口（hwnd/title/class/process/pid/rect/foreground）或进程列表 |
 | | **`ui`** | **紧凑控件清单**：只列可操作控件（按钮/输入框/下拉/菜单/列表…）与短文本，带 `value`，默认 60 条上限。同一窗口比 `snapshot` 小 5–7 倍 |
-| | `screenshot` | PNG 路径 + `srcW/srcH/w/h/scale`，默认缩到 1600 宽；支持 `region` 裁剪、**`trim`（按内容裁剪）** 与 **`minBytes`（拒绝空白图）** |
+| | `screenshot` | PNG 路径 + `srcW/srcH/w/h/scale/mean/contrast`，默认缩到 1600 宽；支持 `region` 裁剪、**`trim`（按内容裁剪）**、**`minBytes`（拒绝空白图）** 与 **`minBrightness`/`minStddev`/`wake`（拒绝休眠屏/纯色帧，可先唤醒再重拍）** |
 | | `snapshot` | UI Automation 控制树，元素 id 形如 `0.2.1`，带类型与矩形（**只在需要结构/父级关系时才用**） |
 | | `find` / `hit` | 按名称找控件 / 查某坐标下是什么窗口与控件 |
 | | `geom` | 窗口矩形 + **客户区原点** + dpi，几何断言的唯一来源 |
 | | `modals` | 枚举可见的 `#32770` 对话框、带 owner 的弹窗、被禁用的顶层窗口（“输入被吞”的第一嫌疑人） |
 | | `hover` | 移到目标控件驻留后读 UIA 的 name/helpText/acceleratorKey 与 `tooltips_class32` 文本 |
+| | **`ocr`** | **当应用根本不给文本时**从截图上读字（tesseract，默认 `chi_sim+eng`）。一次调用换回 `text`，省掉“截图→视觉模型”那条最贵的路。实测控制台 183 字 ≈ 1 秒 |
 | | **`readtext`** | 把窗口的文字读回来（UIA Text/Value → win32 `WM_GETTEXT` 兜底），返回 `text`/`strategy`/`sources` |
 | | **`waittext`** | 轮询 `readtext` 直到正则命中，返回 `matched`/`waitedMs`/`text`；超时给出已读到的尾部文本 |
 | 批量 | **`run`** | **一次调用执行整份计划**（`wait`/`type`/`key`/`click`/`clickrel`/`invoke`/`read`/`shot`），只回每步一行 transcript；输入前自动置前；也可用 `profile` + `task` 重放存好的计划 |
@@ -140,6 +141,43 @@ stopped at step 1 of 2
 - **单次动作一次进程调用**：无常驻服务，卡住也杀得掉，超时默认 30 s。
 - **`snapshot` 与 `find` 的元素 id 是同一套编号**（`0.2.1` 式控制视图路径），所以 `find` 找到控件后可以直接把它的 `id` 喂给 `invoke`，不用再走一遍像素点击。
 - **`dryRun: true`** 只解析 argv、不注入输入、不抢焦点，适合先看它打算干什么。
+
+## 当应用不给文本：`ocr`、帧体检与自动 IME（v0.9.0）
+
+三个实训项目里踩到的坑，最后都落成了引擎能力：
+
+**1. 有些应用读不出文字，但截图上明明有字。** PT 的终端控件是自绘的，`readtext` 只拿到 0 字；过去只能截图 + 视觉模型，一次 1–3k token。现在：
+
+```json
+{ "action": "ocr", "hwnd": "67970", "psm": 6 }
+→ { "ok": true, "text": "RA# show ip route\n...", "chars": 183, "ms": 968 }
+```
+
+`lang` 默认 `chi_sim+eng`，`psm` 默认 6；tesseract 路径用 `DSH_TESSERACT` 或 `--tesseract` 指定。返回的是**文本**，不是图片——模型可以直接 grep 提示符。
+
+**2. 抓到过全黑的"证据图"。** Linux 实训那次报告里有两张图是黑的（mean 2.2），因为抓屏时 guest 屏幕已经休眠，而当时唯一的守门条件是"文件不小于 15KB"——1280×768 的纯黑 PNG 压缩后仍有 37KB。现在 `screenshot` 会自己体检：
+
+| 参数 | 含义 |
+| --- | --- |
+| `minBytes` | 文件字节下限（空白图的粗筛） |
+| `minBrightness` | 亮度均值下限（默认不判） |
+| `minStddev` | 对比度下限（纯色帧必然很低） |
+| `wake` | 先抖一下光标再重拍的次数 |
+
+不达标会**报错而不是返回图**：`the frame looks blank: mean brightness 15 (need >= 20), contrast 3 (need >= 5) after 2 capture(s)`，并在 JSON 里回 `mean`/`contrast` 供你判断。
+
+**3. 中文输入法把注入的 ASCII 合成中文。** PT 里出现 `R 标 p route` 这种回显，密码框只收到回车。现在 `type`/`key`（以及 `run` 的输入步骤）在注入前会自动 `ime --disable`，把目标窗口切到英文布局；`autoIme: false` 可关掉。
+
+**4. 计划里允许"可选步骤"。** 在操作符后面加 `?`：
+
+```
+wait? /Password:/ 1500
+type secret
+key enter
+read
+```
+
+可选步骤失败只记一行 `skipped (optional)`，不影响后续步骤；必选步骤仍然失败即停。
 
 ## 跨机执行：先把另一台机器变成一条命令（token 账）
 
@@ -340,6 +378,8 @@ node test\e2e.mjs
 
 # 文本通道与裁剪：launch cmd → readtext → waittext → trim（只读，不抢焦点）
 node test\readtext.mjs
+# 只读：ocr 读控制台 + 帧体检（需要 tesseract，没有就自动跳过）
+node test\ocr.mjs
 
 # 一次调用跑完一份计划：wait → type → key → wait → read（会抢焦点，1.2 秒）
 node test\plan.mjs
@@ -401,7 +441,7 @@ dsh-computer-use/
 ├─ bridge/cu.cs          # C# 桥源码（单文件，C# 5 语法，csc.exe 可编）
 ├─ bin/cu.exe            # 编译产物（随仓库提供，装完即用）
 ├─ build.ps1             # 重新编译（-Test 连测试夹具一起编）
-├─ test/                 # 71 + 27 项单测 + 只读/闭环脚本 + mock + WinForms 夹具
+├─ test/                 # 78 项单测 + 只读/闭环脚本 + mock + WinForms 夹具
 └─ docs/                 # README 用图
 ```
 
