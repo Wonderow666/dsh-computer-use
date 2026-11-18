@@ -154,3 +154,9 @@
 - 需要等某个提示符出现、而应用不给文本：`waittext {regex, ocr: true}`（计划里写 `wait /…/ 20000 ocr`），一次调用等到位。
 - 读一次状态用 `readtext {ocr: true}`，不要先截图再让模型看图。
 - 开场先 `session`：能不能输入、前面是谁、有没有现成的 profile/target，一句话就能决定走 GUI 还是走 `exec`。
+
+### 2.13 第二次做同一件事之前，先看有没有 profile
+
+- 同一套操作做过一次，就用 `run { save: "<id>/<task>" }` 存成数据，下次一行调用。
+- profile 的 `match` 只看 `process` + `class`：标题变了、窗口重开了也能命中。
+- 存下来的 JSON 在 `<artifacts>/profiles/<id>.json`，抄进 `cordis.patch.yml` 就永久生效。

@@ -143,6 +143,36 @@ stopped at step 1 of 2
 - **`snapshot` 与 `find` 的元素 id 是同一套编号**（`0.2.1` 式控制视图路径），所以 `find` 找到控件后可以直接把它的 `id` 喂给 `invoke`，不用再走一遍像素点击。
 - **`dryRun: true`** 只解析 argv、不注入输入、不抢焦点，适合先看它打算干什么。
 
+## 跑通一次，就存成数据：`run { save }`
+
+上一节讲的是"每应用一份 JSON"。可 JSON 从哪来？以前只能手写。现在跑通的计划可以直接落盘：
+
+```json
+{ "action": "run", "hwnd": "67970", "save": "pt/rip",
+  "plan": "wait /Password:/ 15000 ocr\ntype hhh666\nkey enter\nwait /RA>/ 8000 ocr" }
+```
+
+返回尾部会多两行：
+
+```
+saved profile "pt" (rip) -> C:\Users\…\dsh-computer\profiles\pt.json
+paste this under `profiles:` in cordis.patch.yml:
+  pt:
+    match: { process: "PacketTracer.exe", class: "Qt51516QWindowIcon" }
+    plans:
+      rip: |
+        wait /Password:/ 15000 ocr
+        …
+```
+
+下次就是一次 `{ "action": "run", "profile": "pt", "task": "rip" }`，窗口由 `match` 自己找，计划里不用写坐标也不用写 hwnd。
+
+- **match 只取 `process` + `class`**：标题会变、窗口会重开，进程名和窗口类不会。
+- 同一个 id 再存会**合并** task，不会覆盖别的计划。
+- 文件落在 `<artifacts>/profiles/<id>.json`（默认 `%TEMP%\dsh-computer\profiles\`），可以直接抄进插件配置，永久生效。
+
+**为什么这对 token 重要**：一次走查 PT 的 RIP 配置要几十次点击 + 若干次截图确认；把它变成 profile 后，同样的活只有一行调用和一份 transcript。
+
 ## 等到像素说对了再往下走（v0.10.0）
 
 实训里最贵的一类往返是"打完命令 → 截图 → 猜有没有生效 → 再截图"。现在读和等都能直接落在像素上：
@@ -486,7 +516,7 @@ dsh-computer-use/
 ├─ bridge/cu.cs          # C# 桥源码（单文件，C# 5 语法，csc.exe 可编）
 ├─ bin/cu.exe            # 编译产物（随仓库提供，装完即用）
 ├─ build.ps1             # 重新编译（-Test 连测试夹具一起编）
-├─ test/                 # 83 项单测 + 只读/闭环脚本 + mock + WinForms 夹具
+├─ test/                 # 86 项单测 + 只读/闭环脚本 + mock + WinForms 夹具
 └─ docs/                 # README 用图
 ```
 

@@ -443,6 +443,43 @@ console.log("\n[session / ocr fallbacks]");
     eq(cp.calls.filter((c) => c.argv[0] === "waittext").length, 0);
   });
 }
+console.log("\n[saving a plan as a profile]");
+{
+  const t = boot({});
+  const dir = path.join(ARTIFACTS, "profiles");
+  fs.rmSync(dir, { recursive: true, force: true });
+  // A plan returns a transcript, not JSON.
+  const out = await t.execute({ action: "run", hwnd: "999001", plan: "read\ntype hello", save: "notepad/greet" }, {});
+  check("a passing plan can be saved as a profile", () => {
+    assert.ok(String(out.text).includes('saved profile "notepad"'), out.text);
+    const rec = JSON.parse(fs.readFileSync(path.join(dir, "notepad.json"), "utf8"));
+    eq(rec.id, "notepad");
+    eq(rec.match.process, "notepad.exe");
+    eq(rec.match.class, "Notepad");
+    eq(rec.plans.greet.trim(), "read\ntype hello");
+    assert.ok(String(out.text).includes("match: { process:"), out.text);
+  });
+  check("a saved task is merged, not replaced", () => {
+    return t.execute({ action: "run", hwnd: "999001", plan: "read", save: "notepad/peek" }, {}).then(() => {
+      const rec = JSON.parse(fs.readFileSync(path.join(dir, "notepad.json"), "utf8"));
+      eq(Object.keys(rec.plans).sort().join(","), "greet,peek");
+    });
+  });
+  check("a plan that stopped early is not saved", async () => {
+    fs.rmSync(path.join(dir, "half.json"), { force: true });
+    let err = null;
+    try {
+      // step 1 waits for text the stub never says, so the plan stops there
+      await t.execute({ action: "run", hwnd: "999001", plan: "wait /never-appears/ 200\nread", save: "half/broken" }, {});
+    } catch (e) { err = e; }
+    assert.ok(err && /not saved/.test(err.message), String(err && err.message));
+    eq(fs.existsSync(path.join(dir, "half.json")), false);
+  });  check("a bad profile id is refused", async () => {
+    let err = null;
+    try { await t.execute({ action: "run", hwnd: "999001", plan: "read", save: "bad id!" }, {}); } catch (e) { err = e; }
+    assert.ok(err && /bad profile id/.test(err.message), String(err && err.message));
+  });
+}
 console.log("\n[engine failure]");
 {
   const t = boot({ timeoutMs: 5000 });
