@@ -580,6 +580,41 @@ console.log("\n[window by name, dry run, profile lint]");
     assert.ok(r.profiles[0].problems.some((p) => /\{\{ghost\}\}/.test(p)), JSON.stringify(r.profiles[0].problems));
   });
 }
+console.log("\n[launch inside a plan]");
+{
+  const t = boot({
+    profiles: [{ id: "notepad", match: { process: "notepad.exe" }, plans: { start: "launch C:\\Windows\\notepad.exe" } }]
+  });
+
+  check("a plan can start the app it is about", async () => {
+    cp.calls.length = 0;
+    const r = await t.execute({ action: "run", profile: "notepad", task: "start" }, {});
+    eq(callOf("launch").length, 1);
+    eq(callOf("launch")[0].argv[callOf("launch")[0].argv.indexOf("--path") + 1], "C:\\Windows\\notepad.exe");
+    eq(callOf("launch")[0].argv.includes("--args"), false);
+    assert.ok(/1 launch notepad\.exe pid 4242/.test(text(r)), text(r));
+    // The launched window becomes the plan's target, so the next step has
+    // somewhere to land instead of talking to whatever was in front.
+    assert.ok(/hwnd 999001/.test(text(r)), text(r));
+  });
+
+  check("a pipe separates the path from its arguments", async () => {
+    cp.calls.length = 0;
+    const r = text(await t.execute({ action: "run", window: "notepad", plan: "launch C:\\Program Files\\App\\app.exe | --open \"a b.txt\"" }, {}));
+    const l = callOf("launch")[0].argv;
+    eq(l[l.indexOf("--path") + 1], "C:\\Program Files\\App\\app.exe");
+    eq(l[l.indexOf("--args") + 1], "--open \"a b.txt\"");
+    assert.ok(/launch app\.exe/.test(r), r);
+  });
+
+  check("a launch without a path is a parse error, not a spawn", async () => {
+    cp.calls.length = 0;
+    let err = null;
+    try { await t.execute({ action: "run", window: "notepad", plan: "launch" }, {}); } catch (e) { err = e; }
+    assert.ok(err && /launch needs a path/.test(err.message), String(err && err.message));
+    eq(callOf("launch").length, 0);
+  });
+}
 console.log("\n[engine failure]");
 {
   const t = boot({ timeoutMs: 5000 });

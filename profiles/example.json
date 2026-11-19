@@ -10,6 +10,10 @@
         "editor": "0.1.1"
       },
       "plans": {
+        "start": [
+          "launch C:\\Windows\\System32\\notepad.exe",
+          "wait /Notepad|记事本/ 5000"
+        ],
         "save": [
           "key ctrl+s",
           "wait /Save as|另存为/ 4000"

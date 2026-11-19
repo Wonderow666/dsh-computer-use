@@ -89,6 +89,8 @@ function payload(cmd, o) {
     }
     case "windows":
       return { ok: true, count: state.windows.length, foreground: state.foreground, windows: state.windows };
+    case "launch":
+      return { ok: true, path: o.path, pid: 4242, hwnd: 999001, title: "Untitled - Notepad" };
     case "ocr":
       return {
         ok: true, text: "RA# show ip route", chars: 18, ms: 7,

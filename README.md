@@ -82,6 +82,26 @@ dsh plugin --profile desktop add link:F:\path\to\dsh-computer-use
 
 `click`/`move`/`drag` 会**验证注入是否真的落地**：注入后读回光标，偏差超过 2px 就报错并附诊断，而不是假装成功。窗口移动/缩放后坐标失效的问题，用 `relx`/`rely` 解决——它们是相对目标窗口客户区的偏移，引擎每次实时解析成屏幕坐标。
 
+### 计划能自己启动程序（v0.17.0）
+
+画像写到今天，第一步永远是"先手动把软件打开"——`run {profile, task}` 只会去找已经存在的窗口。加了 `launch` 步骤之后，一个计划可以自己开机：
+
+```json
+"start": [
+  "launch C:\\Windows\\System32\\notepad.exe",
+  "wait /Notepad|记事本/ 5000"
+]
+```
+
+规则三条：
+
+- 动词后面整段都是**路径**；路径带空格不用加引号。
+- 要带命令行参数就在 `|` 后面写：`launch C:\Program Files\App\app.exe | --open "a b.txt"`。
+- `launch` 只负责把进程拉起来，**等窗口就绪用 `wait`**——"起来得多慢"交给 `wait` 的超时决定，而不是塞一个 `sleep`。
+- `launch` 之后**窗口会被接管**：计划里没有指定 `hwnd`/`window` 时，后续步骤自动改用它刚打开的窗口（按 pid 找，找不到再按进程名找——Notepad、Paint 这类打包应用是启动器交出窗口）。所以 `launch` → `wait` → `type` 能连着写。
+
+`run { dryRun: true }` 会把 `launch` 也解析出来但不执行，所以"计划写得对不对"仍然能在动手前验。
+
 ### 开场只花一次进程启动（v0.16.0）
 
 `session` 原来要起两次引擎（`info` 一次、`modals` 一次）。现在引擎的 `info` 支持 `--modals`，对话框列表随 info 一起回来：**一次进程启动**拿到锁屏、前台、屏幕尺寸、模态框、画像匹配。
@@ -523,7 +543,7 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1
 # 连测试夹具一起编（test/target/target.exe，供 input.mjs 用）
 powershell -ExecutionPolicy Bypass -File .\build.ps1 -Test
 
-# 插件契约单测：mock 掉引擎，校验 argv 映射/窗口解析/安全闸/干跑/长文本落盘（93 项）
+# 插件契约单测：mock 掉引擎，校验 argv 映射/窗口解析/安全闸/干跑/长文本落盘/计划启动（100 项）
 node test\run-tests.mjs
 
 # 真机观察链路：真插件 + 真 spawn + 真 cu.exe，只读不注入
@@ -558,7 +578,7 @@ node test\input.mjs
 
 最近一次全量结果：`71 passed, 0 failed`；`profiles.mjs` 37 项全过（匹配语义、`profiles` 不泄漏计划正文、`state.profile` 命中/未命中、`run` 用 `profile`+`task` 自动定位窗口并解析 `{{alias}}`、未知画像/计划/窗口的报错）；`profile-live.mjs` 7 项全过（真机：`launch cmd` → profile 的 `match` 解析出 hwnd → 重放只读计划 → `readtext` 读到 400 字符，`strategy=uia`）；`targets.mjs` 27 项全过（vmrun/ssh argv、guest 真实退出码、二进制 `get` 字节一致、stdout 只留尾部）；`e2e.mjs` 观察链路 OK；`readtext.mjs` 10 项全过（控制台读到 400 字符、`waittext` 109 ms 命中提示符、`--trim` 1440×720 → 483×720 且 PNG 678 KB → 12 KB）；`plan.mjs` 9 项全过（5 步计划一次调用 108 字节 transcript、`done 5/5 in 1.2s`、失败时带上窗口尾部文本）；`panel.mjs` 27 项全过（无 token 401、目录外文件 404、`kill` 403、前缀挂载、客户端 bundle 注册 tab 与 settings section）；`console.mjs` 七步全过；`input.mjs` 两条闭环都 `MATCH`（`SendInput` 键盘与 UIA `SetValue`/`Invoke` 各自独立验证）。
 
-CI（`.github/workflows/ci.yml`，windows-latest）每次 push 会自动跑「编译桥 → 断言 `bin/cu.exe` 存在 → 93 项契约单测 → 38 项跨机适配单测 → 42 项画像单测」，并把编出来的 `cu.exe` 作为 artifact 上传。它只跑不抢焦点的部分，真机注入脚本 `console.mjs` / `input.mjs` / `plan.mjs` 需要人盯着，不进 CI。
+CI（`.github/workflows/ci.yml`，windows-latest）每次 push 会自动跑「编译桥 → 断言 `bin/cu.exe` 存在 → 100 项契约单测 → 38 项跨机适配单测 → 42 项画像单测」，并把编出来的 `cu.exe` 作为 artifact 上传。它只跑不抢焦点的部分，真机注入脚本 `console.mjs` / `input.mjs` / `plan.mjs` 需要人盯着，不进 CI。
 
 `bin/cu.exe` 也可以单独用，方便排查（它自己就是命令行程序，JSON 打到 stdout）：
 
@@ -594,7 +614,7 @@ dsh-computer-use/
 ├─ bridge/cu.cs          # C# 桥源码（单文件，C# 5 语法，csc.exe 可编）
 ├─ bin/cu.exe            # 编译产物（随仓库提供，装完即用）
 ├─ build.ps1             # 重新编译（-Test 连测试夹具一起编）
-├─ test/                 # 95 项单测 + 只读/闭环脚本 + mock + WinForms 夹具
+├─ test/                 # 100 项单测 + 只读/闭环脚本 + mock + WinForms 夹具
 └─ docs/                 # README 用图
 ```
 
