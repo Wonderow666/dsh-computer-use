@@ -82,6 +82,15 @@ dsh plugin --profile desktop add link:F:\path\to\dsh-computer-use
 
 `click`/`move`/`drag` 会**验证注入是否真的落地**：注入后读回光标，偏差超过 2px 就报错并附诊断，而不是假装成功。窗口移动/缩放后坐标失效的问题，用 `relx`/`rely` 解决——它们是相对目标窗口客户区的偏移，引擎每次实时解析成屏幕坐标。
 
+### schema 也是成本（v0.15.0）
+
+工具描述和参数 schema 在**每一次请求**里都要重发一遍，它和截图一样花 token。v0.15.0 把这份固定开销从 **11,756 字符压到 9,046 字符**（-23%）：工具描述 2,415 → 1,230，最长的十几个参数说明各砍掉一半。做法只有两条：
+
+- 描述只留"什么时候用它、代价多大、别踩哪个坑"，长流程放进 README 与 `docs/PLAYBOOK.md`，靠 `session` 的 hint 在需要时提醒；
+- 每加一个参数，先付 ~60 字符的 JSON 骨架，再写一句说明；重复 README 的话不要写第二遍。
+
+随时可以自己量：`node tools/schema-cost.mjs`（或 `pnpm run schema:cost`），它会打印 description / parameter json / 合计字符数与最长的十个说明。
+
 ### 为什么要有 `readtext` / `waittext` / `trim` / `verify`
 
 前三个版本里，“操作对不对”只能靠截图 + OCR 判断，代价是每验证一步都要一次视觉调用；而“命令敲进去没有”只能靠猜，于是会踩到两类静默失败：**IME 把注入的 ASCII 组合成中文**、**提示符还没出来就敲下一条**。v0.3.0 把这两件事都做进工具：

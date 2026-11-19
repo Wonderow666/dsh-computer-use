@@ -1,6 +1,6 @@
 {
   "name": "dsh-computer-use",
-  "version": "0.14.1",
+  "version": "0.15.0",
   "description": "Native Windows GUI control for DeepSeek Harness: screen capture, UI Automation tree, mouse and keyboard injection, app launch and kill, all behind one `computer` tool.",
   "keywords": [
     "dsh",
@@ -28,7 +28,8 @@
     "cordis.patch.yml",
     "README.md",
     "LICENSE",
-    "profiles"
+    "profiles",
+    "tools"
   ],
   "scripts": {
     "build": "powershell -ExecutionPolicy Bypass -File ./build.ps1",
@@ -43,7 +44,8 @@
     "test:console": "node test/console.mjs",
     "test:input": "node test/input.mjs",
     "test:ocr": "node test/ocr.mjs",
-    "test:all": "node test/run-tests.mjs && node test/readtext.mjs && node test/panel.mjs && node test/targets.mjs && node test/profiles.mjs && node test/ocr.mjs"
+    "test:all": "node test/run-tests.mjs && node test/readtext.mjs && node test/panel.mjs && node test/targets.mjs && node test/profiles.mjs && node test/ocr.mjs",
+    "schema:cost": "node tools/schema-cost.mjs"
   },
   "engines": {
     "node": ">=20"

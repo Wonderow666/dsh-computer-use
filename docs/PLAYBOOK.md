@@ -167,6 +167,10 @@ Window 客户机别忘写 `shell: windows`：这样 `exec` 会走 `cmd.exe /c` +
 
 第二次做同一件事、或者要把它交给别人时，别把步骤写在消息里：写成 `profiles/*.json`（`match` 只留 process/class，title 会变），跑通一次就用 `run { save: "<id>/<task>" }` 落盘。内联配置只留给临时试验。
 
+### 2.15b 加参数前先算 schema 成本
+
+工具 schema 每次请求都重发：`node tools/schema-cost.mjs` 量一下。描述写"什么时候用"，别复述 README；一个参数先付 ~60 字符骨架。
+
 ### 2.15a 锁屏只信“事件到没到”
 
 `session` 报 `locked: true` 时先看 `lockedEvidence`：`input-desktop` 才是真锁屏；`lockapp` 只是 `LockApp.exe` 常驻（Windows 11 常态），必须用一次 `inputcheck` 的 `landed` 定论。判据是事件，不是进程。
