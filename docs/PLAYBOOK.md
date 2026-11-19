@@ -167,6 +167,10 @@ Window 客户机别忘写 `shell: windows`：这样 `exec` 会走 `cmd.exe /c` +
 
 第二次做同一件事、或者要把它交给别人时，别把步骤写在消息里：写成 `profiles/*.json`（`match` 只留 process/class，title 会变），跑通一次就用 `run { save: "<id>/<task>" }` 落盘。内联配置只留给临时试验。
 
+### 2.16 模态框要按应用算，不要按桌面算
+
+统计全桌面的 `#32770` 只会得到常驻程序的幽灵弹窗（WeGame 的 `no_active_wnd` 就是一例）。只认属于前台应用的对话框：前台窗口本身、前台进程的对话框、owner 指向前台的弹窗。否则每次开场都会报一个关不掉的"对话框"。
+
 ### 2.15b 加参数前先算 schema 成本
 
 工具 schema 每次请求都重发：`node tools/schema-cost.mjs` 量一下。描述写"什么时候用"，别复述 README；一个参数先付 ~60 字符骨架。

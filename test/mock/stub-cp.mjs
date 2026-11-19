@@ -12,6 +12,7 @@ export const state = {
     { hwnd: 656368, title: "DeepSeek Harness", class: "Chrome_WidgetWin_1", process: "chrome.exe", pid: 32992, visible: true, foreground: true, rect: { x: 318, y: 149, w: 1923, h: 1234 } },
     { hwnd: 999001, title: "Untitled - Notepad", class: "Notepad", process: "notepad.exe", pid: 4242, visible: true, foreground: false, rect: { x: 40, y: 40, w: 900, h: 700 } }
   ],
+  modals: null,
   failNext: null,
   typeVerify: null,
   // Tests flip this to simulate a locked workstation without touching anything else.
@@ -19,6 +20,14 @@ export const state = {
 };
 
 export const calls = [];
+
+// One overlay widget (not a dialog) plus a dialog owned by some other process:
+// neither blocks the foreground app, so a good session bootstrap counts zero.
+// Tests swap this list to simulate a dialog that really is in the way.
+const DEFAULT_MODALS = [
+  { hwnd: 7002, title: "NVIDIA GeForce Overlay DT", class: "CEF-OSC-WIDGET", pid: 9001, process: "NVIDIA Overlay.exe", dialogClass: false, visible: true },
+  { hwnd: 7001, title: "no_active_wnd", class: "#32770", pid: 4242, process: "wegame.exe", dialogClass: true, visible: true, enabled: true }
+];
 
 function opt(argv) {
   const out = {};
@@ -35,14 +44,23 @@ function opt(argv) {
 
 function payload(cmd, o) {
   switch (cmd) {
-    case "info":
-      return {
+    case "info": {
+      const base = {
         ok: true, screenW: 2560, screenH: 1600, virtualX: 0, virtualY: 0,
         cursor: { x: 800, y: 600 }, monitors: state.monitors, foreground: state.foreground,
         locked: false, lockAppRunning: false, inputDesktopName: "Default",
         privileged: true, uiRestrictions: 0,
         ...(state.infoOverride || {})
       };
+      // `info --modals` mirrors the engine: the dialog list rides along so the
+      // session bootstrap costs one process launch instead of two.
+      if (o.modals) {
+        const list = state.modals || DEFAULT_MODALS;
+        base.modals = list;
+        base.modalCount = list.length;
+      }
+      return base;
+    }
     case "ui":
       return {
         ok: true, count: 2, scanned: 9, truncated: false,
@@ -56,11 +74,8 @@ function payload(cmd, o) {
       // One real dialog plus one overlay widget: only the dialog counts.
       return {
         ok: true,
-        count: 2,
-        modals: [
-          { hwnd: 7001, title: "确认删除", class: "#32770", process: "notepad.exe", dialogClass: true, visible: true },
-          { hwnd: 7002, title: "NVIDIA GeForce Overlay DT", class: "CEF-OSC-WIDGET", process: "NVIDIA Overlay.exe", dialogClass: false, visible: true }
-        ]
+        count: (state.modals || DEFAULT_MODALS).length,
+        modals: state.modals || DEFAULT_MODALS
       };
     case "geom": {
       const w = state.windows.find((x) => String(x.hwnd) === String(o.hwnd)) || state.foreground;

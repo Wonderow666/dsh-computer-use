@@ -408,7 +408,13 @@ console.log("\n[ocr / frame quality / optional steps]");
 console.log("\n[session / ocr fallbacks]");
 {
   const t = boot({ tesseract: "C:\\tools\\tesseract.exe" });
+  const beforeCalls = cp.calls.length;
   const s = text(await t.execute({ action: "session" }, {}));
+  check("session bootstraps with one engine launch", () => {
+    // info --modals carries the dialog list, so the old second spawn is gone.
+    eq(cp.calls.length - beforeCalls, 1);
+    eq(cp.calls[cp.calls.length - 1].argv.includes("--modals"), true);
+  });
   check("session answers orientation in one call", () => {
     eq(s.ok, true);
     eq(s.locked, false);
@@ -419,10 +425,20 @@ console.log("\n[session / ocr fallbacks]");
     eq(s.foreground.title, "DeepSeek Harness");
     eq(typeof s.modals, "number");
   });
-  check("session counts dialogs but not overlay widgets", () => {
-    // the stub reports one #32770 dialog and one NVIDIA overlay widget
-    eq(s.modals, 1);
+  check("session ignores dialogs that belong to other processes", () => {
+    // The stub's dialog belongs to wegame.exe (pid 4242) while the foreground is
+    // chrome.exe (pid 32992): WeGame's `no_active_wnd` is resident but harmless.
+    eq(s.modals, 0);
   });
+  cp.state.modals = [
+    { hwnd: 7003, title: "另存为", class: "#32770", pid: 32992, process: "chrome.exe", dialogClass: true, visible: true, enabled: true }
+  ];
+  const sOwnDialog = text(await t.execute({ action: "session" }, {}));
+  check("session counts a dialog owned by the foreground app", () => {
+    eq(sOwnDialog.modals, 1);
+    assert.ok(sOwnDialog.hint.some((h) => /dialog/.test(h)), JSON.stringify(sOwnDialog.hint));
+  });
+  cp.state.modals = null;
 
   // LockApp.exe is resident on Windows 11 whether or not the workstation is
   // locked: on 2026-11-19 the tool reported locked:true while `inputcheck`

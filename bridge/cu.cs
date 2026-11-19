@@ -248,7 +248,7 @@ static class Program
             switch (c.Name)
             {
                 case "help": Help(); return 0;
-                case "info": Info(); break;
+                case "info": Info(c); break;
                 case "windows": Windows(c); break;
                 case "shot": Shot(c); break;
                 case "ocr": Ocr(c); break;
@@ -375,7 +375,7 @@ static class Program
         return list;
     }
 
-    static void Info()
+    static void Info(Cmd c)
     {
         StringBuilder o = new StringBuilder();
         o.Append("{\"ok\":true");
@@ -411,6 +411,16 @@ static class Program
         o.Append(",\"lockAppRunning\":").Append(J.B(LockAppRunning()));
         if (desk != null) o.Append(",\"inputDesktopName\":").Append(J.S(desk));
         o.Append(",\"foreground\":").Append(WinJson(Native.GetForegroundWindow()));
+        // `info --modals` answers "can I act at all" and "is something eating my
+        // clicks" in one process launch: session used to pay two spawns for it.
+        if (c.Has("modals"))
+        {
+            StringBuilder mb = new StringBuilder();
+            int mn;
+            ModalsBody(mb, 0, c.Has("all"), TargetWindow(c), out mn);
+            o.Append(",\"modals\":[").Append(mb.ToString()).Append(']');
+            o.Append(",\"modalCount\":").Append(mn);
+        }
         o.Append('}');
         Emit(o.ToString());
     }
@@ -1905,11 +1915,9 @@ static class Program
         return cl.ToString();
     }
 
-    static void Modals(Cmd c)
+    static void ModalsBody(StringBuilder b, int wantPid, bool all, IntPtr target, out int n)
     {
-        int wantPid = c.I("pid", 0);
-        StringBuilder b = new StringBuilder();
-        int n = 0;
+        int count = 0;
         Native.EnumWindows(delegate(IntPtr h, IntPtr lp)
         {
             int pid; Native.GetWindowThreadProcessId(h, out pid);
@@ -1919,7 +1927,7 @@ static class Program
             // The question this command answers is "is something on screen eating my
             // clicks", so hidden helpers and disabled ghosts are noise: leave them out
             // unless --all is given.
-            if (!visible && !c.Has("all")) return true;
+            if (!visible && !all) return true;
             if (!visible && title.Length == 0) return true;
             bool enabled = Native.IsWindowEnabled(h);
             string cls = ClassOf(h);
@@ -1929,7 +1937,7 @@ static class Program
             bool ownedPopup = owner != IntPtr.Zero && visible;
             if (wantPid == 0) { if (!dialog && !disabled) return true; }
             else { if (!dialog && !disabled && !ownedPopup) return true; }
-            if (n++ > 0) b.Append(',');
+            if (count++ > 0) b.Append(',');
             b.Append("{\"hwnd\":").Append(h.ToInt64());
             b.Append(",\"title\":").Append(J.S(title));
             b.Append(",\"class\":").Append(J.S(cls));
@@ -1938,12 +1946,20 @@ static class Program
             b.Append(",\"visible\":").Append(J.B(visible));
             b.Append(",\"enabled\":").Append(J.B(enabled));
             b.Append(",\"dialogClass\":").Append(J.B(dialog));
-            IntPtr own = TargetWindow(c);
-            if (own != IntPtr.Zero) b.Append(",\"isTarget\":").Append(J.B(h == own));
+            if (target != IntPtr.Zero) b.Append(",\"isTarget\":").Append(J.B(h == target));
             if (owner != IntPtr.Zero) b.Append(",\"owner\":{\"hwnd\":").Append(owner.ToInt64()).Append(",\"title\":").Append(J.S(WindowTitle(owner))).Append('}');
             b.Append('}');
             return true;
         }, IntPtr.Zero);
+        n = count;
+    }
+
+    static void Modals(Cmd c)
+    {
+        int wantPid = c.I("pid", 0);
+        StringBuilder b = new StringBuilder();
+        int n;
+        ModalsBody(b, wantPid, c.Has("all"), TargetWindow(c), out n);
         StringBuilder o = new StringBuilder();
         o.Append("{\"ok\":true");
         if (wantPid != 0) o.Append(",\"pid\":").Append(wantPid);
