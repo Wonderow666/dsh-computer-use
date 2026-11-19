@@ -424,6 +424,25 @@ console.log("\n[session / ocr fallbacks]");
     eq(s.modals, 1);
   });
 
+  // LockApp.exe is resident on Windows 11 whether or not the workstation is
+  // locked: on 2026-11-19 the tool reported locked:true while `inputcheck`
+  // showed landed:true, so the weak witness must ask for confirmation instead
+  // of telling the model that input is dead.
+  cp.state.infoOverride = { locked: true, lockAppRunning: true, inputDesktopName: "Default" };
+  const sWeak = text(await t.execute({ action: "session" }, {}));
+  check("session treats a resident LockApp as suspicion, not proof", () => {
+    eq(sWeak.lockedEvidence, "lockapp");
+    assert.ok(sWeak.hint.some((h) => /inputcheck/.test(h)), JSON.stringify(sWeak.hint));
+    eq(sWeak.hint.some((h) => /input does nothing/.test(h)), false);
+  });
+  cp.state.infoOverride = { locked: true, lockAppRunning: true, inputDesktopName: "LockScreen" };
+  const sHard = text(await t.execute({ action: "session" }, {}));
+  check("session calls it locked when the input desktop is not Default", () => {
+    eq(sHard.lockedEvidence, "input-desktop");
+    assert.ok(sHard.hint.some((h) => /is locked/.test(h)), JSON.stringify(sHard.hint));
+  });
+  cp.state.infoOverride = null;
+
   const r1 = text(await t.execute({ action: "readtext", hwnd: "656368", ocr: true }, {}));
   check("readtext falls back to ocr when asked", () => {
     eq(r1.strategy, "ocr");

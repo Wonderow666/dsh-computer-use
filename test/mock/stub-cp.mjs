@@ -13,7 +13,9 @@ export const state = {
     { hwnd: 999001, title: "Untitled - Notepad", class: "Notepad", process: "notepad.exe", pid: 4242, visible: true, foreground: false, rect: { x: 40, y: 40, w: 900, h: 700 } }
   ],
   failNext: null,
-  typeVerify: null
+  typeVerify: null,
+  // Tests flip this to simulate a locked workstation without touching anything else.
+  infoOverride: null
 };
 
 export const calls = [];
@@ -38,7 +40,8 @@ function payload(cmd, o) {
         ok: true, screenW: 2560, screenH: 1600, virtualX: 0, virtualY: 0,
         cursor: { x: 800, y: 600 }, monitors: state.monitors, foreground: state.foreground,
         locked: false, lockAppRunning: false, inputDesktopName: "Default",
-        privileged: true, uiRestrictions: 0
+        privileged: true, uiRestrictions: 0,
+        ...(state.infoOverride || {})
       };
     case "ui":
       return {

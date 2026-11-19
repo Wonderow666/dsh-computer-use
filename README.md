@@ -478,10 +478,12 @@ Windows 有三套机制会让注入的输入**无声无息地消失**——`Send
 | 静默失败源 | 现象 | 判断 | 处理 |
 | --- | --- | --- | --- |
 | **进程完整性过低** | `SetCursorPos` 返回 False；`SendInput` 返回 1 但指针不动 | `inputcheck` → `integrity: "LOW"` | 引擎必须从**非低完整性**路径运行（见下） |
-| **工作站已锁屏** | 同上，且前台窗口是锁屏界面 | `inputcheck` → `locked: true`（输入桌面不是 `Default`，或 `LockApp`/`LogonUI` 在跑） | 解锁屏幕，没有别的办法 |
+| **工作站已锁屏** | 同上，且前台窗口是锁屏界面 | `inputcheck` → `locked: true` 且 `inputDesktopName` 不是 `Default`；`session` 会给出 `lockedEvidence` | 解锁屏幕，没有别的办法 |
 | **目标进程已提权（UIPI）** | 目标窗口收不到输入 | `inputcheck` → 前台进程提权而引擎没有 | 提权运行目标，或别用提权程序 |
 
-**锁屏这一条最容易误判**：现代 Windows 在 `Default` 桌面上渲染锁屏，所以 `OpenInputDesktop` 明明返回 `Default`、`locked` 曾经也会报 false，而 `SetCursorPos` 照样失败。现在引擎会同时看 `LockApp`/`LogonUI` 进程是否存在，`inputcheck` 里多一个 `lockAppRunning` 字段；两个证人一致才敢说“没锁”。
+**锁屏这一条最容易误判**：现代 Windows 在 `Default` 桌面上渲染锁屏，所以 `OpenInputDesktop` 明明返回 `Default`、`locked` 曾经也会报 false，而 `SetCursorPos` 照样失败。引擎因此把 `LockApp`/`LogonUI` 当第二个证人，`inputcheck` 里多一个 `lockAppRunning` 字段。
+
+但反过来也要小心：**`LockApp.exe` 常驻并不等于锁屏**。2026-11-19 的实机就是 `locked: true / lockAppRunning: true`，而 `inputcheck` 的 `landed` 是 `true`——光标确实被移动了。所以 v0.14.1 起 `session` 会区分证据强度：输入桌面不是 `Default` 才说"已锁屏"（`lockedEvidence: "input-desktop"`）；只是因为 `LockApp` 在跑则标 `lockedEvidence: "lockapp"`，并明确要求先跑一次 `inputcheck` 再下结论。判据永远是"事件到没到屏幕"，不是"哪个进程在跑"。
 
 **低完整性这一条尤其隐蔽**：DSH 给会话工作目录打上 `Low Mandatory Level` 标签（它沙箱的一部分），而 Windows 会**用镜像文件的完整性标签启动进程**。于是从 `F:\Dharness\...\bin\cu.exe` 启动的引擎是 LOW 进程——它能看屏幕、能读控件树，但 `SetCursorPos`/`SendInput` 一律被丢弃。
 
@@ -575,7 +577,7 @@ dsh-computer-use/
 ├─ bridge/cu.cs          # C# 桥源码（单文件，C# 5 语法，csc.exe 可编）
 ├─ bin/cu.exe            # 编译产物（随仓库提供，装完即用）
 ├─ build.ps1             # 重新编译（-Test 连测试夹具一起编）
-├─ test/                 # 93 项单测 + 只读/闭环脚本 + mock + WinForms 夹具
+├─ test/                 # 95 项单测 + 只读/闭环脚本 + mock + WinForms 夹具
 └─ docs/                 # README 用图
 ```
 
