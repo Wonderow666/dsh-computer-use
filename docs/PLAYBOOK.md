@@ -186,6 +186,12 @@ Window 客户机别忘写 `shell: windows`：这样 `exec` 会走 `cmd.exe /c` +
 - `fired: false` 不是错误，是结论；先看 `appeared`，那里往往已经有你要的窗口，只是事件含义没选对。
 - `title` 事件才需要 hwnd；`window-created`/`window-closed` 是全局的。
 
+### 2.21 MCP 只是一层翻译
+
+`mcp/server.mjs` 不重新实现任何能力：它 `apply()` 出同一个工具，再把 `tools/call` 交给 `execute()`。改 schema、加 action、修护栏都只在 `lib/index.js` 一处发生。
+- 测试走线：`test/mcp.mjs` 起子进程、一行一条 JSON-RPC，断言的是线上的行为而不是函数返回值。
+- 工具失败用 `isError: true` 的结果回，协议错误才用 `error`；混用会让客户端把"点了没反应"当成连接故障。
+
 ### 2.17 失败要留现场，不要只说"没成功"
 
 计划失败时工具会写 `artifacts/failures/<时间>/`（plan/transcript/where/shot/tree）。

@@ -540,6 +540,30 @@ read 200
 
 一个反直觉的顺序：**不要 `launch` 之后再用 `watch window-created` 等它**。`launch` 已经等到窗口并把 hwnd 交回来了，再等"新窗口创建"只会等到超时；要等窗口用 `wait /标题/ 5000`，`watch` 留给"窗口由别处打开"的场合（比如你点了菜单、另一个进程被唤起）。
 
+## MCP 包装（v0.21.0）
+
+核心能力不绑在 DSH 上：`mcp/server.mjs` 是同一个 `computer` 工具的 MCP stdio 服务，任何支持 MCP 的客户端（Claude Desktop、IDE、别的 agent 框架）都能直接用。
+
+```json
+{
+  "mcpServers": {
+    "computer": {
+      "command": "node",
+      "args": ["F:\\Dharness\\plugins\\dsh-computer-use\\mcp\\server.mjs"]
+    }
+  }
+}
+```
+
+它只做三件事：`initialize` → `tools/list` → `tools/call`。工具定义、参数 schema、安全护栏全部复用 `lib/index.js`（不是复制一份），所以 DSH 里和 MCP 里的 `computer` 永远是同一份。
+
+- 传输：一行一条 JSON-RPC（MCP stdio 规范）；日志走 stderr，不污染消息流。
+- 失败：参数错或引擎报错 → `isError: true` 的**结果**（模型看得见、能改），只有协议层错误才是 JSON-RPC `error`（未知工具 -32602、未知方法 -32601、坏 JSON -32700）。
+- 配置：环境变量 `DSH_COMPUTER_USE_MCP_CONFIG` 传一个 JSON，内容与 `cordis.patch.yml` 里的插件配置同形（`artifactsDir`、`profiles`、`targets`、`blockedProcesses`…）。
+- 范围：只暴露 tools。要 `resources/*` 的客户端会拿到 -32601——桌面不是数据集，没必要假装是。
+
+实测（真机）：`initialize` 回 `serverInfo.name = "dsh-computer-use"` 与版本号；`tools/list` 一个工具、schema 与插件内定义**同一个对象**；`tools/call {action:"info"}` 拿到 `ok: true, screenW: 2560`；坏 action 回 `isError`；未知工具回 -32602。`test/mcp.mjs` 15 项全绿。
+
 ## 可视化面板：人给模型指路
 
 模型不需要"看着屏幕操作"，但**人需要看着屏幕给模型指路**。面板做四件事：按需截图 → 点一下查这个点是什么控件 → 列出可操作控件 → 记动作日志。
