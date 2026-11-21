@@ -756,6 +756,65 @@ console.log("\n[failure forensics]");
   });
 }
 
+﻿console.log("\n[numbered pictures]");
+{
+  const t = boot();
+  cp.state.ui = [
+    { id: "0.2.0", role: "Text", name: "status line", rect: { x: 10, y: 10, w: 120, h: 20 } },
+    { id: "0.2.1", role: "MenuItem", name: "File", rect: { x: 40, y: 80, w: 60, h: 22 } },
+    { id: "0.2.2", role: "Button", name: "Disabled", enabled: false, rect: { x: 10, y: 120, w: 60, h: 20 } },
+    { id: "0.2.3", role: "Button", name: "Save", rect: { x: 110, y: 220, w: 80, h: 24 } },
+    { id: "0.2.4", role: "Button", name: "Tiny", rect: { x: 10, y: 300, w: 3, h: 3 } },
+    { id: "0.2.5", role: "Button", name: "", rect: { x: 200, y: 300, w: 60, h: 20 } }
+  ];
+  const seen = text(await t.execute({ action: "see", hwnd: "999001", goal: "save the file", max: 5 }, {}));
+  await check("see numbers only the controls it could click", () => {
+    eq(seen.count, 2);
+    eq(seen.targets.map((x) => x.name), ["File", "Save"]);
+  });
+  await check("see returns a picture and the goal", () => {
+    eq(typeof seen.image, "string");
+    eq(seen.goal, "save the file");
+  });
+  await check("see asks the engine to draw the numbers at the right place", () => {
+    const mark = callOf("mark")[0];
+    assert.ok(mark, "mark was not called");
+    const marks = mark.argv[mark.argv.indexOf("--marks") + 1];
+    // The screenshot is 1600 wide for a 2560-wide screen: everything halves.
+    eq(marks.split(";")[0], "1|25|50|38|14");
+  });
+  await check("see leaves the map on disk for clicknum", () => {
+    const side = path.join(ARTIFACTS, "see", "last.json");
+    const last = JSON.parse(fs.readFileSync(side, "utf8"));
+    eq(last.hwnd, "999001");
+    eq(last.targets.length, 2);
+    assert.ok(last.targets[0].rect.w > 0);
+    assert.ok(fs.existsSync(side));
+    eq(last.targets[0].id, "0.2.1");
+  });
+
+  const clicked = text(await t.execute({ action: "clicknum", n: 2 }, {}));
+  await check("clicknum clicks what the number pointed at", () => {
+    eq(clicked.clicked.name, "Save");
+    eq(clicked.how, "invoke");
+    eq(callOf("invoke")[0].argv[callOf("invoke")[0].argv.indexOf("--path") + 1], "0.2.3");
+  });
+  await assert.rejects(() => t.execute({ action: "clicknum", n: 99 }, {}), /there is no 99/);
+  await check("clicknum refuses a number the picture did not print", () => {});
+
+  const empty = boot({ artifactsDir: path.join(ARTIFACTS, "nothing-here") });
+  await assert.rejects(() => empty.execute({ action: "clicknum", n: 1 }, {}), /no numbered picture yet/);
+  await check("clicknum without a picture says what to do first", () => {});
+
+  cp.state.ui = [];
+  const blank = text(await t.execute({ action: "see", hwnd: "999001" }, {}));
+  await check("see still returns the picture when nothing is clickable", () => {
+    eq(blank.count, 0);
+    assert.ok(/no named controls/.test(blank.hint), blank.hint);
+  });
+  cp.state.ui = null;
+}
+
 console.log("\n[engine failure]");
 {
   const t = boot({ timeoutMs: 5000 });

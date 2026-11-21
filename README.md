@@ -5,7 +5,7 @@
 
 > 让 [DeepSeek Harness](https://github.com/deepseek-ai/dsh)（DSH）真正“动手”操作 Windows 桌面的原生插件：看屏幕、读控件树、点击、打字、启动/关闭软件。全部能力收在一个 `computer` 工具里，底层是一个 70 KB 的单文件 C# 桥 `bin/cu.exe`（Win32 + UI Automation，无第三方依赖、无 Python、不需要视觉模型）。
 
-> **English TL;DR** — a native DSH plugin that gives the agent control of a Windows desktop through a single `computer` tool: 35 actions covering screen capture, the UI Automation tree, a compact control inventory, text readback, SendInput mouse/keyboard injection, UIA pattern invocation (`SetValue`/`Invoke` with no focus or pixel dependency), one-call step plans, cross-machine `exec` over VMware Tools or ssh, per-app profiles, plus an optional read-only panel a human can point at. The engine is one 70 KB C# file compiled by the .NET Framework compiler that ships with Windows — no Python, no MCP hop, no service to keep alive, no vision model required (screenshots are written to disk and returned as paths, then read by whatever vision tool the host has). Input is guarded three times: a configurable per-process blocklist, a hard "target must be foreground" refusal, and a dual-witness point-ownership check before every click. MIT, Windows 10/11, DSH 0.2.x.
+> **English TL;DR** — a native DSH plugin that gives the agent control of a Windows desktop through a single `computer` tool: 39 actions covering screen capture, the UI Automation tree, a compact control inventory, text readback, SendInput mouse/keyboard injection, UIA pattern invocation (`SetValue`/`Invoke` with no focus or pixel dependency), one-call step plans, cross-machine `exec` over VMware Tools or ssh, per-app profiles, plus an optional read-only panel a human can point at. The engine is one 70 KB C# file compiled by the .NET Framework compiler that ships with Windows — no Python, no MCP hop, no service to keep alive, no vision model required (screenshots are written to disk and returned as paths, then read by whatever vision tool the host has). Input is guarded three times: a configurable per-process blocklist, a hard "target must be foreground" refusal, and a dual-witness point-ownership check before every click. MIT, Windows 10/11, DSH 0.2.x.
 
 [<img src="https://cdn.jsdelivr.net/gh/Wonderow666/dsh-computer-use@main/docs/input-roundtrip.png" width="560" alt="测试窗口：插件通过 UI Automation 的 Value 模式把文字写进输入框，再通过 Invoke 模式点下保存按钮">](https://github.com/Wonderow666/dsh-computer-use/blob/main/docs/input-roundtrip.png)
 
@@ -50,7 +50,7 @@ dsh plugin --profile desktop add link:F:\path\to\dsh-computer-use
 
 重启后模型侧多出一个 `computer` 工具。插件配置在 `cordis.patch.yml`（`blockedProcesses`、`refuseFullscreenForeground`、`allowProcessControl`、`timeoutMs`、`enginePath`、`artifactsDir`），profile 自己的 `cordis.patch.yml` 可以按 id 覆盖这些字段。
 
-## 工具面（单一 `computer`，37 个 action）
+## 工具面（单一 `computer`，39 个 action）
 
 | 类别 | action | 返回 |
 | --- | --- | --- |
@@ -564,6 +564,30 @@ read 200
 
 实测（真机）：`initialize` 回 `serverInfo.name = "dsh-computer-use"` 与版本号；`tools/list` 一个工具、schema 与插件内定义**同一个对象**；`tools/call {action:"info"}` 拿到 `ok: true, screenW: 2560`；坏 action 回 `isError`；未知工具回 -32602。`test/mcp.mjs` 15 项全绿。
 
+## 看得见的编号：把定位变成"第 3 个"（v0.22.0）
+
+画面类软件（画布、游戏、自绘面板）没有可读的控件树，模型只能靠坐标猜。`see` 换了个做法：先截一张图，把**能点的地方按读图顺序编上号**，再回来一份编号表；要点击时只要说 `clicknum 3`。
+
+| 想做什么 | 怎么写 | 回来什么 |
+| --- | --- | --- |
+| 给窗口编号 | `computer action=see hwnd=721562 goal="找一个按钮"` | `{image, count, targets:[{n,role,name}]}` |
+| 点第 3 个 | `computer action=clicknum n=3` | `{ok, clicked:{n,role,name}, how:"invoke"|"point"}` |
+
+三条行为值得记：
+
+1. **只编号能点的东西**：`Text`、禁用控件、没有名字的、短边小于 8px 的都跳过（编号多了反而要读更多）。默认最多 12 个（`max` 上限 30），按从上到下、从左到右排序。
+2. **先把窗口调到前台再截**：截到的不是目标窗口，就退回让窗口自己画（`printwindow`）。否则数字会落在别的窗口的像素上——真机第一版就是这样把编号画到了聊天窗上。
+3. **编号表存在磁盘上**：`artifacts/see/last.json` 记住这张图每个数字对应的控件与矩形，所以 `clicknum` 可以晚几步再用；重新 `see` 一次就覆盖成新的。
+
+真机一次 `see`（记事本，`max=6`）：
+
+```
+targets: 1:Button:最小化 | 2:Button:最大化 | 3:Button:关闭 | 4:MenuItem:系统 | 5:TabItem:无标题. 未修改。 | 6:Button:关闭标签页
+clicked 4:MenuItem:系统 via invoke
+```
+
+`how` 是结果不是承诺：能 `invoke` 就走控件本身（被滚出视野也有效），不能才退回到矩形中心点一下。编号挤在一起时（标题栏三个按钮只隔 10px），徽标会按碰撞避让挪位；如果图上看不清，`find --name` 仍然是最精确的那把尺。
+
 ## 可视化面板：人给模型指路
 
 模型不需要"看着屏幕操作"，但**人需要看着屏幕给模型指路**。面板做四件事：按需截图 → 点一下查这个点是什么控件 → 列出可操作控件 → 记动作日志。
@@ -702,9 +726,9 @@ node test\console.mjs
 node test\input.mjs
 ```
 
-最近一次全量结果：`71 passed, 0 failed`；`profiles.mjs` 37 项全过（匹配语义、`profiles` 不泄漏计划正文、`state.profile` 命中/未命中、`run` 用 `profile`+`task` 自动定位窗口并解析 `{{alias}}`、未知画像/计划/窗口的报错）；`profile-live.mjs` 7 项全过（真机：`launch cmd` → profile 的 `match` 解析出 hwnd → 重放只读计划 → `readtext` 读到 400 字符，`strategy=uia`）；`targets.mjs` 27 项全过（vmrun/ssh argv、guest 真实退出码、二进制 `get` 字节一致、stdout 只留尾部）；`e2e.mjs` 观察链路 OK；`readtext.mjs` 10 项全过（控制台读到 400 字符、`waittext` 109 ms 命中提示符、`--trim` 1440×720 → 483×720 且 PNG 678 KB → 12 KB）；`plan.mjs` 9 项全过（5 步计划一次调用 108 字节 transcript、`done 5/5 in 1.2s`、失败时带上窗口尾部文本）；`panel.mjs` 27 项全过（无 token 401、目录外文件 404、`kill` 403、前缀挂载、客户端 bundle 注册 tab 与 settings section）；`console.mjs` 七步全过；`input.mjs` 两条闭环都 `MATCH`（`SendInput` 键盘与 UIA `SetValue`/`Invoke` 各自独立验证）。
+最近一次全量结果：`123 passed, 0 failed`；`profiles.mjs` 42 项全过（匹配语义、`profiles` 不泄漏计划正文、`state.profile` 命中/未命中、`run` 用 `profile`+`task` 自动定位窗口并解析 `{{alias}}`、未知画像/计划/窗口的报错）；`profile-live.mjs` 7 项全过（真机：`launch cmd` → profile 的 `match` 解析出 hwnd → 重放只读计划 → `readtext` 读到 400 字符，`strategy=uia`）；`targets.mjs` 38 项全过（vmrun/ssh argv、guest 真实退出码、二进制 `get` 字节一致、stdout 只留尾部）；`e2e.mjs` 观察链路 OK；`readtext.mjs` 10 项全过（控制台读到 400 字符、`waittext` 109 ms 命中提示符、`--trim` 1440×720 → 483×720 且 PNG 678 KB → 12 KB）；`plan.mjs` 9 项全过（5 步计划一次调用 108 字节 transcript、`done 5/5 in 1.2s`、失败时带上窗口尾部文本）；`panel.mjs` 27 项全过（无 token 401、目录外文件 404、`kill` 403、前缀挂载、客户端 bundle 注册 tab 与 settings section）；`console.mjs` 七步全过；`input.mjs` 两条闭环都 `MATCH`（`SendInput` 键盘与 UIA `SetValue`/`Invoke` 各自独立验证）。
 
-CI（`.github/workflows/ci.yml`，windows-latest）每次 push 会自动跑「编译桥 → 断言 `bin/cu.exe` 存在 → 100 项契约单测 → 38 项跨机适配单测 → 42 项画像单测」，并把编出来的 `cu.exe` 作为 artifact 上传。它只跑不抢焦点的部分，真机注入脚本 `console.mjs` / `input.mjs` / `plan.mjs` 需要人盯着，不进 CI。
+CI（`.github/workflows/ci.yml`，windows-latest）每次 push 会自动跑「编译桥 → 断言 `bin/cu.exe` 存在 → 123 项契约单测 → 38 项跨机适配单测 → 42 项画像单测」，并把编出来的 `cu.exe` 作为 artifact 上传。它只跑不抢焦点的部分，真机注入脚本 `console.mjs` / `input.mjs` / `plan.mjs` 需要人盯着，不进 CI。
 
 `bin/cu.exe` 也可以单独用，方便排查（它自己就是命令行程序，JSON 打到 stdout）：
 

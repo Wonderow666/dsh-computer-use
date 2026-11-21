@@ -286,6 +286,7 @@ static class Program
                 case "procs": Procs(c); break;
                 case "clip": Clip(c); break;
                 case "invoke": Invoke(c); break;
+                case "mark": Mark(c); break;
                 case "wait": Thread.Sleep(Math.Max(0, c.I("ms", 500))); break;
                 default: Err("unknown command: " + c.Name); return 2;
             }
@@ -741,6 +742,82 @@ static class Program
             Native.SetCursorPos(p.X, p.Y);
         }
         catch { }
+    }
+
+    // Numbered pictures: the caller says where the interesting things are, the
+    // engine draws 1..N on top of them. A model that can see "3" does not have to
+    // negotiate pixel coordinates with a canvas app that exposes no control tree.
+    static void Mark(Cmd c)
+    {
+        string input = c.Get("in", null);
+        string output = c.Get("out", null);
+        if (input == null || output == null) { Err("mark needs --in and --out"); return; }
+        if (!File.Exists(input)) { Err("no such image: " + input); return; }
+        string spec = c.Get("marks", "");
+        int drawn = 0, w = 0, h = 0;
+        using (Bitmap img = new Bitmap(input))
+        {
+            w = img.Width; h = img.Height;
+            using (Graphics g = Graphics.FromImage(img))
+            {
+                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+                float px = Math.Max(10f, Math.Min(18f, w / 110f));
+                using (Font font = new Font("Segoe UI", px, FontStyle.Bold, GraphicsUnit.Pixel))
+                using (Pen pen = new Pen(Color.FromArgb(235, 255, 59, 48), Math.Max(2f, w / 700f)))
+                using (Brush fill = new SolidBrush(Color.FromArgb(235, 255, 59, 48)))
+                {
+                    // Badges must not pile up on each other: chrome buttons sit a
+                    // few pixels apart, so a 20px circle at each corner would turn
+                    // "1 2 3" into an unreadable blob. Place, check, nudge.
+                    List<RectangleF> placed = new List<RectangleF>();
+                    string[] parts = spec.Split(new char[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
+                    for (int i = 0; i < parts.Length; i++)
+                    {
+                        string[] f = parts[i].Split('|');
+                        if (f.Length < 5) continue;
+                        int x, y, bw, bh;
+                        if (!int.TryParse(f[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out x)) continue;
+                        if (!int.TryParse(f[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out y)) continue;
+                        if (!int.TryParse(f[3], NumberStyles.Integer, CultureInfo.InvariantCulture, out bw)) continue;
+                        if (!int.TryParse(f[4], NumberStyles.Integer, CultureInfo.InvariantCulture, out bh)) continue;
+                        Rectangle r = new Rectangle(x, y, Math.Max(2, bw), Math.Max(2, bh));
+                        if (r.Right < 0 || r.Bottom < 0 || r.Left > w || r.Top > h) continue;
+                        g.DrawRectangle(pen, r);
+                        float size = font.Height + 4f;
+                        float inset = size / 2f + 1f;
+                        float cx = r.Left + Math.Min(inset, r.Width / 2f);
+                        float cy = r.Top + Math.Min(inset, r.Height / 2f);
+                        for (int t = 0; t < 8; t++)
+                        {
+                            RectangleF cand = new RectangleF(cx - size / 2f, cy - size / 2f, size, size);
+                            bool clash = false;
+                            for (int k = 0; k < placed.Count; k++) { if (placed[k].IntersectsWith(cand)) { clash = true; break; } }
+                            if (!clash) break;
+                            cx += size + 1f;
+                            if (cx + size / 2f > Math.Min(r.Right, w)) { cx = r.Left; cy += size + 1f; }
+                        }
+                        cx = Math.Min(w - size / 2f, Math.Max(size / 2f, cx));
+                        cy = Math.Min(h - size / 2f, Math.Max(size / 2f, cy));
+                        placed.Add(new RectangleF(cx - size / 2f, cy - size / 2f, size, size));
+                        g.FillEllipse(fill, cx - size / 2f, cy - size / 2f, size, size);
+                        SizeF ts = g.MeasureString(f[0], font);
+                        g.DrawString(f[0], font, Brushes.White, cx - ts.Width / 2f, cy - ts.Height / 2f);
+                        drawn++;
+                    }
+                }
+            }
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(output)));
+            img.Save(output, ImageFormat.Png);
+        }
+        long bytes = 0;
+        try { bytes = new FileInfo(output).Length; } catch { }
+        StringBuilder o = new StringBuilder();
+        o.Append("{\"ok\":true,\"path\":").Append(J.S(Path.GetFullPath(output)));
+        o.Append(",\"marks\":").Append(drawn);
+        o.Append(",\"w\":").Append(w).Append(",\"h\":").Append(h);
+        o.Append(",\"bytes\":").Append(bytes).Append('}');
+        Emit(o.ToString());
     }
 
     static void Shot(Cmd c)

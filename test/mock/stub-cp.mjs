@@ -15,6 +15,8 @@ export const state = {
   modals: null,
   // Tests say what a `watch` call should see: fired (default) or a timeout.
   watch: null,
+  // Tests say what `ui` exposes when the default two controls are not enough.
+  ui: null,
   failNext: null,
   typeVerify: null,
   // Tests flip this to simulate a locked workstation without touching anything else.
@@ -63,15 +65,16 @@ function payload(cmd, o) {
       }
       return base;
     }
-    case "ui":
-      return {
-        ok: true, count: 2, scanned: 9, truncated: false,
-        root: state.foreground,
-        items: [
-          { id: "0.1.0", role: "Button", name: "Save", rect: { x: 10, y: 20, w: 80, h: 24 } },
-          { id: "0.1.1", role: "Edit", name: "Name", value: "hello", rect: { x: 10, y: 60, w: 200, h: 24 } }
-        ]
-      };
+    case "ui": {
+      const items = state.ui || [
+        { id: "0.1.0", role: "Button", name: "Save", rect: { x: 10, y: 20, w: 80, h: 24 } },
+        { id: "0.1.1", role: "Edit", name: "Name", value: "hello", rect: { x: 10, y: 60, w: 200, h: 24 } }
+      ];
+      return { ok: true, count: items.length, scanned: 9, truncated: false, root: state.foreground, items };
+    }
+    case "mark":
+      // The engine draws; the stub only has to prove what it was asked to draw.
+      return { ok: true, path: o.out, marks: String(o.marks || "").split(";").filter(Boolean).length, w: 1600, h: 1000, bytes: 23456 };
     case "watch": {
       // The real engine hooks a win event; here the script says what happens,
       // so a test can ask for "it fired" and "it timed out" without a desktop.
@@ -116,7 +119,12 @@ function payload(cmd, o) {
       };
     case "ime":
       return { ok: true, action: "ime", layout: "en-US" };
-    case "shot":
+    case "shot": {
+      // A shot of a named window reports that window as the foreground: that is
+      // what tells `see` the pixels really are the target's.
+      const fg = o.hwnd
+        ? (state.windows.find((w) => String(w.hwnd) === String(o.hwnd)) || state.foreground)
+        : state.foreground;
       return {
         ok: true, path: o.out, x: 0, y: 0,
         mean: o["min-brightness"] ? 180 : 16, contrast: 24,
@@ -124,8 +132,9 @@ function payload(cmd, o) {
         w: Number(o.maxw || 1600), h: Math.round(Number(o.maxw || 1600) * 1600 / 2560),
         srcW: 2560, srcH: 1600,
         ...(o.trim ? { trim: { x: 12, y: 30, w: 400, h: 120 } } : {}),
-        cursor: { x: 800, y: 600 }, foreground: state.foreground
+        cursor: { x: 800, y: 600 }, foreground: fg
       };
+    }
     case "readtext":
       return {
         ok: true, hwnd: Number(o.hwnd), title: state.foreground.title,
