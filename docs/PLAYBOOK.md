@@ -179,6 +179,13 @@ Window 客户机别忘写 `shell: windows`：这样 `exec` 会走 `cmd.exe /c` +
 总是把引擎复制到 `%LOCALAPPDATA%\dsh-computer-use\engine\` 再跑；测试若图省事直接
 指向工作目录里的 `bin/cu.exe`，就会得到"所有应用都没有控件"的假象。
 
+### 2.20 等事件，不要轮询
+
+`watch` 是一次调用换掉一个轮询循环：`watch window-created 8000` 在窗口出现的那一刻返回，静默桌面则等到超时并给出 `appeared` 列表。
+- 顺序别写反：`launch` 已经返回窗口，**不要**再用 `window-created` 等它；要等就用 `wait /标题/`。
+- `fired: false` 不是错误，是结论；先看 `appeared`，那里往往已经有你要的窗口，只是事件含义没选对。
+- `title` 事件才需要 hwnd；`window-created`/`window-closed` 是全局的。
+
 ### 2.17 失败要留现场，不要只说"没成功"
 
 计划失败时工具会写 `artifacts/failures/<时间>/`（plan/transcript/where/shot/tree）。

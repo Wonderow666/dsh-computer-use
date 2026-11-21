@@ -43,6 +43,13 @@ static class Native
         PeekMessage(out m, IntPtr.Zero, 0, 0, 0);
     }
 
+
+    // ---------- Win events (wait without polling) ----------
+    public delegate void WinEventProc(IntPtr hHook, uint ev, IntPtr hwnd, int idObject, int idChild, uint thread, uint when);
+    [DllImport("user32.dll")] public static extern IntPtr SetWinEventHook(uint min, uint max, IntPtr mod, WinEventProc cb, uint pid, uint tid, uint flags);
+    [DllImport("user32.dll")] public static extern bool UnhookWinEvent(IntPtr h);
+    [DllImport("user32.dll")] public static extern bool TranslateMessage(ref MSG m);
+    [DllImport("user32.dll")] public static extern IntPtr DispatchMessage(ref MSG m);
     // ---------- Windows ----------
     public delegate bool EnumProc(IntPtr hWnd, IntPtr lParam);
     [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr lp);
@@ -261,6 +268,7 @@ static class Program
             case "hover": Hover(c); break;
             case "geom": Geom(c); break;
             case "modals": Modals(c); break;
+            case "watch": Watch(c); break;
                 case "readtext": ReadText(c); break;
                 case "waittext": WaitText(c); break;
                 case "move": Mouse(c, "move"); break;
@@ -468,6 +476,79 @@ static class Program
         finally { Native.CloseHandle(h); }
     }
 
+    // Waiting on a win event is the whole point of this command: a poll loop
+    // costs one process launch plus a full text read per try, while a hook is
+    // a sleep that wakes on the event itself. On timeout it still reports what
+    // appeared meanwhile, because "missed the event" and "nothing happened"
+    // look identical from the outside.
+    static void Watch(Cmd c)
+    {
+        string ev = c.Get("event", "window-created").ToLowerInvariant();
+        int timeout = c.I("timeout", 10000);
+        if (timeout < 0) timeout = 0;
+        long target = 0;
+        try { if (c.Has("hwnd")) target = long.Parse(c.Get("hwnd", "0"), CultureInfo.InvariantCulture); } catch { }
+        int wantPid = c.I("pid", 0);
+
+        HashSet<long> before = new HashSet<long>();
+        Native.EnumWindows(delegate(IntPtr h, IntPtr lp) { before.Add(h.ToInt64()); return true; }, IntPtr.Zero);
+
+        long hit = 0;
+        Native.WinEventProc cb = delegate(IntPtr hHook, uint type, IntPtr hwnd, int idObject, int idChild, uint thr, uint when)
+        {
+            if (hwnd == IntPtr.Zero || idObject != 0 || idChild != 0) return;
+            if (!WatchMatch(ev, hwnd, target, wantPid)) return;
+            if (hit == 0) hit = hwnd.ToInt64();
+        };
+
+        uint lo = 0x8002, hi = 0x8002; // EVENT_OBJECT_SHOW
+        if (ev == "foreground") { lo = 0x0003; hi = 0x0003; }
+        else if (ev == "window-closed") { lo = 0x8001; hi = 0x8001; }
+        else if (ev == "title") { lo = 0x800C; hi = 0x800C; }
+        else if (ev != "window-created") throw new ArgumentException("unknown event \"" + ev + "\"; use window-created, window-closed, foreground or title");
+
+        IntPtr hook = Native.SetWinEventHook(lo, hi, IntPtr.Zero, cb, 0, 0, 0);
+        Stopwatch sw = Stopwatch.StartNew();
+        while (hook != IntPtr.Zero && hit == 0 && sw.ElapsedMilliseconds < timeout)
+        {
+            Native.MSG m;
+            while (Native.PeekMessage(out m, IntPtr.Zero, 0, 0, 1)) { Native.TranslateMessage(ref m); Native.DispatchMessage(ref m); }
+            if (hit == 0) System.Threading.Thread.Sleep(4);
+        }
+        if (hook != IntPtr.Zero) Native.UnhookWinEvent(hook);
+
+        StringBuilder o = new StringBuilder();
+        o.Append("{\"ok\":true,\"fired\":").Append(J.B(hit != 0));
+        o.Append(",\"event\":").Append(J.S(ev));
+        o.Append(",\"waitedMs\":").Append(sw.ElapsedMilliseconds);
+        o.Append(",\"window\":").Append(hit != 0 ? WinJson((IntPtr)hit) : "null");
+        if (hit == 0)
+        {
+            List<IntPtr> fresh = new List<IntPtr>();
+            Native.EnumWindows(delegate(IntPtr h, IntPtr lp)
+            {
+                if (!before.Contains(h.ToInt64()) && Native.IsWindowVisible(h) && WindowTitle(h).Length > 0) fresh.Add(h);
+                return true;
+            }, IntPtr.Zero);
+            o.Append(",\"appeared\":[");
+            for (int i = 0; i < fresh.Count && i < 10; i++) { if (i > 0) o.Append(','); o.Append(WinJson(fresh[i])); }
+            o.Append("]");
+        }
+        o.Append("}");
+        Out.Write(o.ToString() + "\n");
+    }
+
+    static bool WatchMatch(string ev, IntPtr hwnd, long target, int wantPid)
+    {
+        int pid = 0; Native.GetWindowThreadProcessId(hwnd, out pid);
+        if (target != 0 && hwnd.ToInt64() != target) return false;
+        if (wantPid != 0 && pid != wantPid) return false;
+        if (ev != "window-created") return true;
+        // Only top-level windows people can see count as "a window came up".
+        if (Native.GetAncestor(hwnd, GA_ROOT) != hwnd) return false;
+        if (!Native.IsWindowVisible(hwnd)) return false;
+        return WindowTitle(hwnd).Length > 0;
+    }
     static Dictionary<int, IntPtr> MainWindows()
     {
         Dictionary<int, IntPtr> d = new Dictionary<int, IntPtr>();

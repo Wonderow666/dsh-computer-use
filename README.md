@@ -50,7 +50,7 @@ dsh plugin --profile desktop add link:F:\path\to\dsh-computer-use
 
 重启后模型侧多出一个 `computer` 工具。插件配置在 `cordis.patch.yml`（`blockedProcesses`、`refuseFullscreenForeground`、`allowProcessControl`、`timeoutMs`、`enginePath`、`artifactsDir`），profile 自己的 `cordis.patch.yml` 可以按 id 覆盖这些字段。
 
-## 工具面（单一 `computer`，35 个 action）
+## 工具面（单一 `computer`，37 个 action）
 
 | 类别 | action | 返回 |
 | --- | --- | --- |
@@ -510,6 +510,35 @@ press "Save" via invoke (Button)
 `enginePath` 直接指向了工作目录里的 `bin/cu.exe`——工作目录里的进程是低完整性级别，
 UIA 客户端跨不过去，于是每棵树都是空的。生产路径一直没这个问题，因为插件会把引擎复制到
 `%LOCALAPPDATA%` 再跑。测试脚本现在也照这个来（`test/_harness.mjs` 不再传 `enginePath`）。
+
+## 等事件，不轮询（v0.20.0）
+
+轮询是一种花自己的 token 去问"好了吗"的方式：每 300ms 起一次引擎、读一次文本、判断一次，直到某个东西出现。桌面上的多数等待都有事件可听——窗口被创建、被关闭、切到前台、标题变了——所以 v0.20.0 把等待做成一次调用：
+
+```json
+{ "action": "watch", "event": "window-created", "timeout": 10000 }
+```
+
+引擎用 `SetWinEventHook` 挂上事件，边泵消息边等；事件到了立刻返回，最多等到 timeout。
+
+| 参数 | 含义 |
+| --- | --- |
+| `event` | `window-created`（默认）、`window-closed`、`foreground`、`title` |
+| `timeout` | 毫秒，默认 10000；到点返回 `fired: false` |
+| `hwnd` / `pid` | 只看这个窗口或这个进程（`title` 事件用它） |
+
+返回 `{ok, fired, event, waitedMs, window, appeared}`：`window` 是那个窗口（hwnd/title/class/process/pid/rect）；`fired: false` 时带 `appeared`，列出等待期间新出现的窗口——"漏了事件"和"什么都没发生"从外面看是一样的，不给这个列表就只能猜。
+
+计划里同样能用：
+
+```text
+watch window-created 8000
+read 200
+```
+
+实测（Windows 11，2560×1600）：静默桌面 `timeout 400` → 405ms 返回 `fired: false`；后台 600ms 时启动 notepad → 819ms 返回 `fired: true`，`window.title = "记事本"`。计划里 `watch window-created 8000` 等到窗口后，下一步 `read` 直接读它（计划没指定 hwnd 时，watch 看到的窗口会成为后续步骤的目标）。
+
+一个反直觉的顺序：**不要 `launch` 之后再用 `watch window-created` 等它**。`launch` 已经等到窗口并把 hwnd 交回来了，再等"新窗口创建"只会等到超时；要等窗口用 `wait /标题/ 5000`，`watch` 留给"窗口由别处打开"的场合（比如你点了菜单、另一个进程被唤起）。
 
 ## 可视化面板：人给模型指路
 

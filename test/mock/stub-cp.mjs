@@ -13,6 +13,8 @@ export const state = {
     { hwnd: 999001, title: "Untitled - Notepad", class: "Notepad", process: "notepad.exe", pid: 4242, visible: true, foreground: false, rect: { x: 40, y: 40, w: 900, h: 700 } }
   ],
   modals: null,
+  // Tests say what a `watch` call should see: fired (default) or a timeout.
+  watch: null,
   failNext: null,
   typeVerify: null,
   // Tests flip this to simulate a locked workstation without touching anything else.
@@ -70,6 +72,21 @@ function payload(cmd, o) {
           { id: "0.1.1", role: "Edit", name: "Name", value: "hello", rect: { x: 10, y: 60, w: 200, h: 24 } }
         ]
       };
+    case "watch": {
+      // The real engine hooks a win event; here the script says what happens,
+      // so a test can ask for "it fired" and "it timed out" without a desktop.
+      const plan = state.watch || {};
+      const want = o.event || "window-created";
+      if (plan.event && plan.event !== want) return { ok: true, fired: false, event: want, waitedMs: 5, window: null, appeared: [] };
+      if (plan.fired === false) {
+        return { ok: true, fired: false, event: want, waitedMs: plan.waitedMs || 120, window: null, appeared: plan.appeared || [] };
+      }
+      return {
+        ok: true, fired: true, event: want, waitedMs: plan.waitedMs || 42,
+        window: plan.window || { hwnd: 777001, title: "Fresh Window", class: "Notepad", process: "notepad.exe", pid: 4243, visible: true, rect: { x: 10, y: 10, w: 400, h: 300 } },
+        appeared: []
+      };
+    }
     case "modals":
       // One real dialog plus one overlay widget: only the dialog counts.
       return {
@@ -120,10 +137,22 @@ function payload(cmd, o) {
         ok: true, matched: true, strategy: "ocr", waitedMs: 980, tries: 2,
         chars: 42, regex: o.regex || ".*", text: "RA# show ip route\nO 192.168.1.0/24"
       };
-    case "waittext":
-      return {
-        ok: true, matched: true, waitedMs: 42, hwnd: Number(o.hwnd), strategy: "uia", chars: 12, text: "RA#"
-      };
+    case "waittext": {
+      // A wait that always matches makes every timeout path untestable.
+      // The words the happy-path tests wait for, on one screen: a stub that
+      // only knows "never-there" cannot tell success from failure.
+      const screen = "RA# show ip route\nok Saved hello world";
+      const pattern = String(o.regex || ".*");
+      let hit = true;
+      try { hit = new RegExp(pattern, "i").test(screen); } catch { hit = true; }
+      if (!hit) {
+        return {
+          ok: false, matched: false, waitedMs: 42, hwnd: Number(o.hwnd), strategy: "uia", chars: 12, text: "RA#",
+          error: `text did not match /${pattern}/ within ${Number(o.timeout || 8000)}ms in window ${o.hwnd}`
+        };
+      }
+      return { ok: true, matched: true, waitedMs: 42, hwnd: Number(o.hwnd), strategy: "uia", chars: 12, text: screen };
+    }
     case "type":
       if (!o.verify) return { ok: true, action: "type", chars: 7 };
       if (state.typeVerify === "mismatch") {
@@ -136,12 +165,13 @@ function payload(cmd, o) {
       return { ok: true, action: "type", chars: 7, verified: "unavailable", strategy: "none" };
     case "tree":
       return { ok: true, nodes: [{ id: "0", name: "Window", type: "Window", hwnd: Number(o.hwnd) }, { id: "0.1.2", name: "Save", type: "Button", rect: { x: 10, y: 20, w: 80, h: 24 } }] };
-    case "find":
-      return {
-        ok: true,
-        count: 1,
-        matches: [{ id: "0.1.2", role: "Button", name: "Save", automationId: "save", rect: { x: 10, y: 20, w: 80, h: 24 } }]
-      };
+    case "find": {
+      // A finder that answers every query cannot tell "Save" from "Nonexistent".
+      const want = String(o.name || "").toLowerCase();
+      const all = [{ id: "0.1.2", role: "Button", name: "Save", automationId: "save", rect: { x: 10, y: 20, w: 80, h: 24 } }];
+      const matches = want ? all.filter((m) => m.name.toLowerCase().includes(want)) : all;
+      return { ok: true, count: matches.length, matches };
+    }
     case "procs":
       return { ok: true, count: 2, processes: [{ pid: 4242, name: "notepad.exe" }, { pid: 32992, name: "chrome.exe" }] };
     case "focus":
