@@ -11,9 +11,14 @@ export const ARTIFACTS = path.join(ROOT, "artifacts");
 export async function loadTool(config = {}) {
   const mod = await import(pathToFileURL(path.join(ROOT, "lib", "index.js")).href);
   const defs = [];
+  // Production never hands the plugin an engine path: it copies the binary to
+  // %LOCALAPPDATA% and runs it from there, because a process started straight
+  // out of the workspace runs at low integrity and then UIA answers with an
+  // empty tree (found the hard way: `find --name 文件` returned count 0 while
+  // the staged copy returned the File menu). Only the unit tests point at the
+  // stub, and they say so explicitly.
   mod.apply({ tools: { register: (def) => defs.push(def) } }, {
     enabled: true,
-    enginePath: ENGINE,
     artifactsDir: path.join(ARTIFACTS, "e2e"),
     timeoutMs: 30000,
     ...config,

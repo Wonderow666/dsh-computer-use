@@ -459,6 +459,58 @@ transcript 的最后一行会给出目录路径。之后用 `computer action=fai
 
 为什么值得多花一次截屏 + 一次控件树：**失败如果不可回看，就只能靠猜**。真机上第一次跑出来的证据是 476 字符的控制台文本 + 37KB 截图 + 14 个节点，足以让人一眼看出“等错窗口了”还是“文本被 IME 吃了”。成功的计划不留任何东西（不留垃圾）。
 
+## 点名字，不是坐标（v0.19.0）
+
+坐标是"这一刻这一块屏幕上的一个位置"。窗口挪一下、列表滚一格、系统换个语言，坐标就错，
+而名字通常还在。所以让点击先认名字：
+
+```
+computer action=click name="Save"                  # 找到名为 Save 的控件，先 invoke
+computer action=click name="导出" role=Button      # 同名太多时按角色筛
+computer action=click name="第 3 页" index=2       # 再按序号挑
+```
+
+点击顺序是 **invoke → 点中心 → 报错**：控件能 invoke 就 invoke（被滚出视野也有效，
+这对长列表很关键），不能才在控件矩形的中心真点一下，两样都不行就说清为什么：
+
+```
+no control matches "Save" in window 721562; closest: MenuItem:文件 | Button:标题
+```
+
+这条路径在计划里写作 `press`，占位符写作 `{{名字}}`，来源是 `vars`：
+
+```
+computer action=run window="Notepad" vars={"file":"report.txt"} plan="
+  until /无标题/ 4000 press 文件
+  type {{file}}
+  key ctrl+s
+"
+```
+
+计划现在有三种"重来一次"，都在引擎里循环，不花模型的 token：
+
+| 前缀 | 意思 | 什么时候用 |
+| --- | --- | --- |
+| `repeat N 步骤` | 原样重试 N 次（上限 50） | 点一下可能没跟上的按钮 |
+| `until /re/ [ms] 步骤` | 做一步，再读窗口文本，被正则匹配就停 | "点完等它变成什么样"的每一步 |
+| 直接写 | 只做一次 | 其余情况 |
+
+真机上一分钟的结果（Windows 11，Notepad）：
+
+```
+1 1 key ctrl+a until /notepad|记事本|无标题/ ok
+done 1/1 in 0.7s
+```
+
+```
+press "Save" via invoke (Button)
+```
+
+**一个必须记住的边界**：本次排查里 `find` 一度对所有窗口返回空树，原因是集成脚本把
+`enginePath` 直接指向了工作目录里的 `bin/cu.exe`——工作目录里的进程是低完整性级别，
+UIA 客户端跨不过去，于是每棵树都是空的。生产路径一直没这个问题，因为插件会把引擎复制到
+`%LOCALAPPDATA%` 再跑。测试脚本现在也照这个来（`test/_harness.mjs` 不再传 `enginePath`）。
+
 ## 可视化面板：人给模型指路
 
 模型不需要"看着屏幕操作"，但**人需要看着屏幕给模型指路**。面板做四件事：按需截图 → 点一下查这个点是什么控件 → 列出可操作控件 → 记动作日志。

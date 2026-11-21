@@ -167,6 +167,18 @@ Window 客户机别忘写 `shell: windows`：这样 `exec` 会走 `cmd.exe /c` +
 
 第二次做同一件事、或者要把它交给别人时，别把步骤写在消息里：写成 `profiles/*.json`（`match` 只留 process/class，title 会变），跑通一次就用 `run { save: "<id>/<task>" }` 落盘。内联配置只留给临时试验。
 
+### 2.18 点名字，把循环交给引擎
+
+- 能 `click name=…` 就不要算坐标：窗口一动坐标就废，名字通常还在。
+- 计划里写 `until /re/ [ms] 步骤`，比"发一次然后祈祷"稳；`repeat N` 只用于"点了可能没跟上"。
+- `vars` 让同一份计划跑不同数据，比复制十份计划省事，也比"录制"更像一份计划。
+
+### 2.19 集成脚本必须走 stageEngine 的路径
+
+低完整性进程的 UIA 客户端读到的是空树（`count: 0`、`scanned` 却不为 0）。生产路径
+总是把引擎复制到 `%LOCALAPPDATA%\dsh-computer-use\engine\` 再跑；测试若图省事直接
+指向工作目录里的 `bin/cu.exe`，就会得到"所有应用都没有控件"的假象。
+
 ### 2.17 失败要留现场，不要只说"没成功"
 
 计划失败时工具会写 `artifacts/failures/<时间>/`（plan/transcript/where/shot/tree）。

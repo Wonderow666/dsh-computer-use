@@ -25,7 +25,9 @@ try { fs.unlinkSync(proof); } catch {}
 
 const launched = await run({ action: "launch", path: "C:\\Windows\\System32\\cmd.exe" });
 const pid = launched.pid;
-let con = null;
+// launch now hands back the window it started (or the one the launcher gave
+// it), so trust that first and only go looking when it could not tell.
+let con = launched.hwnd ? { hwnd: launched.hwnd, title: launched.title } : null;
 for (let i = 0; i < 20 && !con; i++) {
   const list = await run({ action: "windows" });
   con = (list.windows || []).find((w) => Number(w.pid) === Number(pid) && w.visible);
@@ -63,8 +65,16 @@ console.log(failing.text);
 check("a failed wait stops the plan", /FAILED/.test(failing.text) && /stopped at step 1 of 2/.test(failing.text));
 check("the failure quotes the window text", /last text:/.test(failing.text));
 
-const killed = spawnSync(ENGINE, ["kill", "--pid", String(pid)], { encoding: "utf8" });
-check("console closed", killed.status === 0, (killed.stdout || "").trim().slice(0, 60));
+// Kill through the tool (same staged engine production uses) and then check
+// the effect - the window is gone - rather than an exit code.
+const listing = await run({ action: "windows" });
+const mine = (listing.windows || []).find((w) => String(w.hwnd) === String(con.hwnd));
+const killPid = (mine && mine.pid) || pid;
+await run({ action: "kill", pid: Number(killPid) }).catch(() => null);
+await new Promise((r) => setTimeout(r, 500));
+const after = await run({ action: "windows" });
+const still = (after.windows || []).some((w) => String(w.hwnd) === String(con.hwnd));
+check("console closed", !still, still ? "window still open" : `pid ${killPid} gone`);
 
 const failed = results.filter((r) => !r.ok).length;
 console.log(`\n${results.length - failed} passed, ${failed} failed  (artifacts: ${ARTIFACTS})\n`);

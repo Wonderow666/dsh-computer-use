@@ -137,7 +137,11 @@ function payload(cmd, o) {
     case "tree":
       return { ok: true, nodes: [{ id: "0", name: "Window", type: "Window", hwnd: Number(o.hwnd) }, { id: "0.1.2", name: "Save", type: "Button", rect: { x: 10, y: 20, w: 80, h: 24 } }] };
     case "find":
-      return { ok: true, matches: [{ id: "0.1.2", name: "Save", type: "Button" }] };
+      return {
+        ok: true,
+        count: 1,
+        matches: [{ id: "0.1.2", role: "Button", name: "Save", automationId: "save", rect: { x: 10, y: 20, w: 80, h: 24 } }]
+      };
     case "procs":
       return { ok: true, count: 2, processes: [{ pid: 4242, name: "notepad.exe" }, { pid: 32992, name: "chrome.exe" }] };
     case "focus":

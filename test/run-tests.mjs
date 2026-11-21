@@ -615,6 +615,67 @@ console.log("\n[launch inside a plan]");
     eq(callOf("launch").length, 0);
   });
 }
+console.log("\n[controls by name, plan vars and loops]");
+{
+  const t = boot({ profiles: [{ id: "notepad", match: { process: "notepad.exe" }, aliases: { file: "notes.txt" }, plans: {} }] });
+
+  check("click --name finds the control and invokes it", async () => {
+    cp.calls.length = 0;
+    const r = text(await t.execute({ action: "click", name: "Save", title: "Notepad" }, {}));
+    eq(r.how, "invoke");
+    eq(r.role, "Button");
+    const inv = callOf("invoke")[0];
+    assert.ok(inv, "no invoke call");
+    eq(inv.argv[inv.argv.indexOf("--path") + 1], "0.1.2");
+  });
+
+  check("a name that matches nothing says what is there instead", async () => {
+    let err = null;
+    try { await t.execute({ action: "click", name: "Nonexistent", title: "Notepad" }, {}); } catch (e) { err = e; }
+    assert.ok(err && /no control matches "Nonexistent"/.test(err.message), String(err && err.message));
+  });
+
+  check("press is the plan verb for the same thing", async () => {
+    const r = text(await t.execute({ action: "run", window: "notepad", plan: "press Save" }, {}));
+    assert.ok(/press "Save" via invoke \(Button\)/.test(r), r);
+  });
+
+  check("vars fill {{name}} wherever it stands in the plan", async () => {
+    cp.calls.length = 0;
+    const r = text(await t.execute({ action: "run", window: "notepad", plan: "type {{file}}", vars: { file: "report.txt" } }, {}));
+    assert.ok(/type 10ch/.test(r), r);
+    const ty = callOf("type")[0];
+    eq(ty.argv[ty.argv.indexOf("--text") + 1], "report.txt");
+  });
+
+  check("repeat retries a step the stated number of times", async () => {
+    cp.calls.length = 0;
+    const r = text(await t.execute({ action: "run", window: "notepad", plan: "repeat 3 wait /never-there/ 20" }, {}));
+    eq(callOf("waittext").length, 3);
+    assert.ok(/FAILED/.test(r), r);
+  });
+
+  check("until repeats a step until the window agrees", async () => {
+    cp.calls.length = 0;
+    const r = text(await t.execute({ action: "run", window: "notepad", plan: "until /hello/ 3000 key ctrl+s" }, {}));
+    assert.ok(/key ctrl\+s until \/hello\/ ok/.test(r), r);
+    eq(callOf("key").length, 1);
+  });
+
+  check("until gives up on time and says which text it waited for", async () => {
+    cp.calls.length = 0;
+    const r = text(await t.execute({ action: "run", window: "notepad", plan: "until /never-there/ 400 key ctrl+s" }, {}));
+    assert.ok(/FAILED/.test(r) && /never-there/.test(r), r);
+    assert.ok(callOf("key").length >= 1, "the step never ran");
+  });
+
+  check("an empty prefix is a parse error", async () => {
+    let err = null;
+    try { await t.execute({ action: "run", window: "notepad", plan: "repeat 3" }, {}); } catch (e) { err = e; }
+    assert.ok(err && /prefix has no step/.test(err.message), String(err && err.message));
+  });
+}
+
 console.log("\n[failure forensics]");
 {
   const t = boot({});
