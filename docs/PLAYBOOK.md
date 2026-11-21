@@ -167,6 +167,13 @@ Window 客户机别忘写 `shell: windows`：这样 `exec` 会走 `cmd.exe /c` +
 
 第二次做同一件事、或者要把它交给别人时，别把步骤写在消息里：写成 `profiles/*.json`（`match` 只留 process/class，title 会变），跑通一次就用 `run { save: "<id>/<task>" }` 落盘。内联配置只留给临时试验。
 
+### 2.17 失败要留现场，不要只说"没成功"
+
+计划失败时工具会写 `artifacts/failures/<时间>/`（plan/transcript/where/shot/tree）。
+- transcript 只有一行字，**回看顺序是 tree.json → shot.png → transcript**：先看控件树有没有目标，再看像素上目标在不在，最后才信文字。
+- 同一个失败重复出现两次，就不是环境问题，是计划写错了：改 `plan.txt` 再跑。
+- 用 `failures` 列最近几次；目录是磁盘上的真相，会话重开也还在。
+
 ### 2.16a 计划自己启动程序，别把开机留给"人"
 
 `launch PATH [| args]` 是计划步骤，不只是 `action=launch` 的专利。看到画像第一步是"打开软件"，就写成 `start` 计划：`launch` 拉起进程、`wait /标题/ 5000` 等窗口就绪。别用 `sleep` 赌加载时间——加载慢的时候计划会假失败，加载快的时候白等。

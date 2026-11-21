@@ -615,6 +615,42 @@ console.log("\n[launch inside a plan]");
     eq(callOf("launch").length, 0);
   });
 }
+console.log("\n[failure forensics]");
+{
+  const t = boot({});
+
+  check("a failed plan leaves a directory with the plan, the transcript and the pixels", async () => {
+    const r = text(await t.execute({ action: "run", window: "notepad", plan: "wait /definitely-not-there/ 60" }, {}));
+    assert.ok(/FAILED/.test(r), r);
+    const m = /forensics: (.+)$/m.exec(r);
+    assert.ok(m, r);
+    const dir = m[1].trim();
+    for (const f of ["plan.txt", "transcript.txt", "where.json"]) {
+      assert.ok(fs.existsSync(path.join(dir, f)), `missing ${f} in ${dir}`);
+    }
+    assert.ok(/wait \/definitely-not-there\/ 60/.test(fs.readFileSync(path.join(dir, "plan.txt"), "utf8")));
+    const where = JSON.parse(fs.readFileSync(path.join(dir, "where.json"), "utf8"));
+    eq(where.stoppedAt, 1);
+    eq(where.steps, 1);
+    eq(where.hwnd, "999001");
+  });
+
+  check("the failures action lists what is on disk", async () => {
+    const r = text(await t.execute({ action: "failures", limit: 5 }, {}));
+    const j = JSON.parse(r);
+    assert.ok(j.count >= 1, r);
+    assert.ok(j.failures[0].dir && /definitely-not-there/.test(j.failures[0].stopped), r);
+  });
+
+  check("a plan that worked leaves nothing behind", async () => {
+    const before = (() => { try { return fs.readdirSync(path.join(ARTIFACTS, "failures")).length; } catch { return 0; } })();
+    const r = text(await t.execute({ action: "run", window: "notepad", plan: "read" }, {}));
+    assert.ok(!/forensics/.test(r), r);
+    const after = (() => { try { return fs.readdirSync(path.join(ARTIFACTS, "failures")).length; } catch { return 0; } })();
+    eq(after, before);
+  });
+}
+
 console.log("\n[engine failure]");
 {
   const t = boot({ timeoutMs: 5000 });
