@@ -895,6 +895,22 @@ console.log("\n[coordinates, retries, uploads]");
     eq(keys.slice(-2), ["ctrl+a", "return"]);
   });
 
+  cp.state.modals = null;
+  cp.state.modalsQueue = [
+    [
+      { hwnd: 8801, title: "no_active_wnd", class: "#32770", pid: 4242, process: "wegame.exe", dialogClass: true, visible: true, enabled: true },
+      { hwnd: 8802, title: "打开", class: "#32770", pid: 32992, process: "chrome.exe", dialogClass: true, visible: true, enabled: true }
+    ],
+    []
+  ];
+  const picked = text(await u.execute({ action: "upload", path: file }, {}));
+  await check("upload picks the dialog of the app in front, not a background one", () => {
+    eq(picked.dialog, "打开");
+    eq(picked.dialogPid, 32992);
+    const typed = callOf("type").at(-1);
+    eq(typed.argv[typed.argv.indexOf("--hwnd") + 1], "8802");
+  });
+
   cp.state.modalsQueue = null;
   cp.state.modals = [];
   await assert.rejects(() => u.execute({ action: "upload", path: file }, {}), /no file dialog is open/);

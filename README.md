@@ -744,6 +744,27 @@ ok   a confirm the page opened can be answered  {"ok":true,"accepted":true}
 ok   answering when nothing is open is a clear error  no dialog is open (No dialog is showing)
 ```
 
+## 上传要挑对那个对话框（v0.27.1）
+
+`upload` 以前取"最像文件对话框的那个 #32770"。桌面上常驻着别的 `#32770`：wegame 的 `no_active_wnd` 就是可见、enabled、标题毫无提示的一个——路径被它吞掉，真对话框一个字符都没收到，于是"上传成功"但文件没打开。
+
+现在的规则：**只认前台那个应用的对话框**。
+
+1. 先排除 `visible:false` / `enabled:false`，以及标题为 `no_active_wnd` 的后台框；
+2. 剩下的按"属于前台进程" + "标题像打开/保存" + `dialogClass` 排序，取第一个；
+3. 一个可用框都没有时直接报错，并把候选连同进程名列出来：`upload: only background dialogs are open: no_active_wnd (wegame.exe) - open the file picker in the app you mean`；
+4. 第一次 Enter 没关上框，会再补一次 Enter（有些 Open 框在名字框还在组合时不认第一次），仍关不上才返回 `closed:false` 与下一步提示。
+
+真机（notepad 的"打开"框，前台 pid 23908）：
+
+```json
+{"ok":true,"dialog":"打开","dialogPid":23908,"file":"…\\upload-live.txt","closed":true}
+```
+
+随后 `readtext` 读到的就是文件内容（`dsh upload ok`）——注意 Notepad 会把文件开在**新标签**里，验证时要读标题带文件名的那个窗口，而不是原来的空白标签。
+
+回归：`run-tests 140`、`profiles 42`、`targets 38`、`upload-live all good`。
+
 ## 三个默认值，现在会说出来（v0.27.0）
 
 三次复盘里最贵的错误都不是"点错了"，而是**返回值没有说清楚它做了什么**。这一版把三处默认值改成明说：
@@ -916,9 +937,9 @@ node test\console.mjs
 node test\input.mjs
 ```
 
-最近一次全量结果：`139 passed, 0 failed`；`profiles.mjs` 42 项全过（匹配语义、`profiles` 不泄漏计划正文、`state.profile` 命中/未命中、`run` 用 `profile`+`task` 自动定位窗口并解析 `{{alias}}`、未知画像/计划/窗口的报错）；`profile-live.mjs` 7 项全过（真机：`launch cmd` → profile 的 `match` 解析出 hwnd → 重放只读计划 → `readtext` 读到 400 字符，`strategy=uia`）；`targets.mjs` 38 项全过（vmrun/ssh argv、guest 真实退出码、二进制 `get` 字节一致、stdout 只留尾部）；`e2e.mjs` 观察链路 OK；`readtext.mjs` 10 项全过（控制台读到 400 字符、`waittext` 109 ms 命中提示符、`--trim` 1440×720 → 483×720 且 PNG 678 KB → 12 KB）；`plan.mjs` 9 项全过（5 步计划一次调用 108 字节 transcript、`done 5/5 in 1.2s`、失败时带上窗口尾部文本）；`panel.mjs` 27 项全过（无 token 401、目录外文件 404、`kill` 403、前缀挂载、客户端 bundle 注册 tab 与 settings section）；`console.mjs` 七步全过；`input.mjs` 两条闭环都 `MATCH`（`SendInput` 键盘与 UIA `SetValue`/`Invoke` 各自独立验证）。
+最近一次全量结果：`140 passed, 0 failed`；`profiles.mjs` 42 项全过（匹配语义、`profiles` 不泄漏计划正文、`state.profile` 命中/未命中、`run` 用 `profile`+`task` 自动定位窗口并解析 `{{alias}}`、未知画像/计划/窗口的报错）；`profile-live.mjs` 7 项全过（真机：`launch cmd` → profile 的 `match` 解析出 hwnd → 重放只读计划 → `readtext` 读到 400 字符，`strategy=uia`）；`targets.mjs` 38 项全过（vmrun/ssh argv、guest 真实退出码、二进制 `get` 字节一致、stdout 只留尾部）；`e2e.mjs` 观察链路 OK；`readtext.mjs` 10 项全过（控制台读到 400 字符、`waittext` 109 ms 命中提示符、`--trim` 1440×720 → 483×720 且 PNG 678 KB → 12 KB）；`plan.mjs` 9 项全过（5 步计划一次调用 108 字节 transcript、`done 5/5 in 1.2s`、失败时带上窗口尾部文本）；`panel.mjs` 27 项全过（无 token 401、目录外文件 404、`kill` 403、前缀挂载、客户端 bundle 注册 tab 与 settings section）；`console.mjs` 七步全过；`input.mjs` 两条闭环都 `MATCH`（`SendInput` 键盘与 UIA `SetValue`/`Invoke` 各自独立验证）。
 
-CI（`.github/workflows/ci.yml`，windows-latest）每次 push 会自动跑「编译桥 → 断言 `bin/cu.exe` 存在 → 139 项契约单测 → 38 项跨机适配单测 → 42 项画像单测」，并把编出来的 `cu.exe` 作为 artifact 上传。它只跑不抢焦点的部分，真机注入脚本 `console.mjs` / `input.mjs` / `plan.mjs` 需要人盯着，不进 CI。
+CI（`.github/workflows/ci.yml`，windows-latest）每次 push 会自动跑「编译桥 → 断言 `bin/cu.exe` 存在 → 140 项契约单测 → 38 项跨机适配单测 → 42 项画像单测」，并把编出来的 `cu.exe` 作为 artifact 上传。它只跑不抢焦点的部分，真机注入脚本 `console.mjs` / `input.mjs` / `plan.mjs` 需要人盯着，不进 CI。
 
 `bin/cu.exe` 也可以单独用，方便排查（它自己就是命令行程序，JSON 打到 stdout）：
 

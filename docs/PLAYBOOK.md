@@ -275,3 +275,7 @@ Window 客户机别忘写 `shell: windows`：这样 `exec` 会走 `cmd.exe /c` +
 `invoke` 在没有 UIA pattern 的控件上会点中心，这是兜底，不是 Invoke。返回里现在有 `degraded: "click-center"` 和一句 `why`，计划里也会写 `(no invoke pattern: clicked the centre)`。看到它，下一步必须是"看结果"（`readtext`、`state`、局部截图），而不是"再 invoke 一次"。
 
 同理：`screenshot { clientRegion }` 把客户区坐标的换算收进插件；视觉模型不可用时先试 `ocr`（本机 tesseract），不要自己拼命令行。
+
+### 2.29 弹出来的框，要先问是谁的
+
+桌面上可能同时有好几个 `#32770`。`upload` 现在只认前台应用的框，并在一个可用框都没有时报出候选与进程名。真机上的反例是 wegame 的 `no_active_wnd`：可见、enabled、标题没有意义，路径打进去就消失——遇到"上传成功但文件没开"，先看返回的 `dialogPid` 是不是你要的那个应用。
