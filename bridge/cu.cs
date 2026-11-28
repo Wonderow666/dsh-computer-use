@@ -2505,23 +2505,38 @@ static class Program
         if (file != null) text = File.ReadAllText(file, Encoding.UTF8);
         if (text == null) { Err("--text or --textfile is required"); return; }
         RequireForeground(c);
+        // 2ms per character loses or doubles characters under load: a 7-char
+        // burst came out wrong 5 times in 12 on this machine. 8ms is the floor
+        // that held; --delay 0 restores the old behaviour on purpose.
+        int delayMs = Math.Max(0, c.I("delay", 8));
         foreach (char ch in text)
         {
             if (ch == '\n') { KeyDownUp(0x0D, true); KeyDownUp(0x0D, false); }
             else if (ch == '\r') continue;
             else if (ch == '\t') { KeyDownUp(0x09, true); KeyDownUp(0x09, false); }
             else UnicodeChar(ch);
-            Thread.Sleep(2);
+            if (delayMs > 0) Thread.Sleep(delayMs);
         }
         // --verify closes the loop the app cannot: keystrokes can be swallowed by
         // an IME composition, a secure field or a lost focus, and the only honest
         // answer is whether the text actually showed up in the window.
-        if (c.Has("verify"))
+        // Verification is the default, not an option: a type that silently
+        // lands the wrong text is worse than one that fails. --noverify opts out.
+        if (!c.Has("noverify"))
         {
             IntPtr hwnd = TargetHwndOrForeground(c);
             int maxChars = Math.Max(4000, text.Length * 8);
             string strategy, sources;
+            // The edit control paints a frame or two behind SendInput; reading
+            // straight away showed the previous text and called it a failure.
+            Thread.Sleep(150);
             string seen = GatherText(hwnd, maxChars, out strategy, out sources);
+            if (Normalize(seen).IndexOf(Normalize(text), StringComparison.OrdinalIgnoreCase) < 0)
+            {
+                Thread.Sleep(250);
+                string second = GatherText(hwnd, maxChars, out strategy, out sources);
+                if (Normalize(second).IndexOf(Normalize(text), StringComparison.OrdinalIgnoreCase) >= 0) seen = second;
+            }
             if (seen.Trim().Length == 0)
             {
                 Emit("{\"ok\":true,\"action\":\"type\",\"chars\":" + text.Length +

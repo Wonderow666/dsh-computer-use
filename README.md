@@ -680,7 +680,7 @@ click     → 页面触发 report.csv
 poll      → [ 'report.csv' ]   （guid 已被改名）
 ```
 
-顺带一句边界：浏览器能做的是"网页里的事"。系统弹窗、原生安装器、桌面软件，仍然归 `computer` 的其余 40 个 action。
+顺带一句边界：浏览器能做的是"网页里的事"。系统弹窗、原生安装器、桌面软件，仍然归 `computer` 的其余 41 个 action。
 
 ## 网页动作也能写进计划（v0.25.0）
 
@@ -837,6 +837,55 @@ screenshot:
 
 回归：`run-tests 139`、`profiles 42`、`targets 38`、`browser live` 全绿；schema 11,154 字符/请求（+303，全部花在这三处说明上）。
 
+## 验证是默认的，失败会自己解释（v0.29.0）
+
+计划里能写 `assert`，打字默认读回，失败自带三行摘要。这三件事都不需要模型记得去做。
+
+**先断言，再往下**
+
+```js
+{ action: "run", plan: "type hello dsh\nassert /hello dsh/ 4000" }
+```
+
+```
+1 type 9ch verified
+2 assert /hello dsh/ ok :: hello dsh 行 1，列 10 9 个字符 纯文本 1
+done 2/2 in 1.6s
+```
+
+断言不成立时，失败块不是一句"没成功"，而是三行能直接接着干的：
+
+```
+1 assert FAILED after 987ms: text did not match /this is not on screen/ within 824ms
+stopped at step 1 of 1; last ok: (nothing ran yet)
+screen: "hello dsh 行 1，列 10 9 个字符 纯文本 100% Windows (CRLF) UTF-8"
+forensics: artifacts/e2e/failures/2026-11-28T11-52-49-008
+next: fix step 1 and rerun, or action="failures" to list what was saved
+```
+
+`last ok` 说明前面哪一步是好的，`screen` 是停下那一刻窗口上的字，`next` 是下一步动作。
+计划里有点击/输入却从不检查结果时，结尾还会自己提醒一句 `hint: …`；`dryRun` 也会带 `warnings`。
+
+**打字默认读回**
+
+引擎原来每个字符等 2ms，实测 12 次连打 `xyz 123` **错 5 次**（`xyz 223`、`xyz 3`）；
+现在默认 8ms/字符（`--delay 0` 可显式退回旧行为），同一脚本 **12/12 正确**，并且每次输入后都读回一次
+（编辑控件比 SendInput 晚一两帧，先等 150ms，没命中再等 250ms 重读）。
+计划里的行因此变成 `1 type 9ch verified`；窗口没有文本通道时写 `(unverified: no text channel)`，不假装成功。
+
+**五份配方**（`profiles/recipes.json`，随 `profilesFile: profiles` 自动加载）
+
+| 配方 | 干什么 | 关键步骤 |
+| --- | --- | --- |
+| `notepad` | 记事本起/写/读/菜单 | `start`、`write {{text}}`、`read`、`menu` |
+| `eclipse` | 打开资源、运行、取控制台 | `open-resource {{file}}`、`run`、`console-text` |
+| `wps` | 打开文档、逐页读 | `open {{file}}`、`read-page`（OCR）、`next-page` |
+| `edge-console` | 打开网页、搜索、读正文 | `open {{url}}`、`search {{q}}`（`page` 动词） |
+| `packet-tracer` | 读工作区、读 CLI | `read-screen`、`workspace-list`、`console-read` |
+
+配方里的 `{{name}}` 由 `run { profile, vars: { name: "…" } }` 填；`profiles { check: true }` 会把这些
+占位符记为 `callerVars` 而不是错误——它们本来就该由调用方给。
+
 ## 可视化面板：人给模型指路
 
 模型不需要"看着屏幕操作"，但**人需要看着屏幕给模型指路**。面板做四件事：按需截图 → 点一下查这个点是什么控件 → 列出可操作控件 → 记动作日志。
@@ -975,7 +1024,7 @@ node test\console.mjs
 node test\input.mjs
 ```
 
-最近一次全量结果：`143 passed, 0 failed`；`profiles.mjs` 42 项全过（匹配语义、`profiles` 不泄漏计划正文、`state.profile` 命中/未命中、`run` 用 `profile`+`task` 自动定位窗口并解析 `{{alias}}`、未知画像/计划/窗口的报错）；`profile-live.mjs` 7 项全过（真机：`launch cmd` → profile 的 `match` 解析出 hwnd → 重放只读计划 → `readtext` 读到 400 字符，`strategy=uia`）；`targets.mjs` 38 项全过（vmrun/ssh argv、guest 真实退出码、二进制 `get` 字节一致、stdout 只留尾部）；`e2e.mjs` 观察链路 OK；`readtext.mjs` 10 项全过（控制台读到 400 字符、`waittext` 109 ms 命中提示符、`--trim` 1440×720 → 483×720 且 PNG 678 KB → 12 KB）；`plan.mjs` 9 项全过（5 步计划一次调用 108 字节 transcript、`done 5/5 in 1.2s`、失败时带上窗口尾部文本）；`panel.mjs` 27 项全过（无 token 401、目录外文件 404、`kill` 403、前缀挂载、客户端 bundle 注册 tab 与 settings section）；`console.mjs` 七步全过；`input.mjs` 两条闭环都 `MATCH`（`SendInput` 键盘与 UIA `SetValue`/`Invoke` 各自独立验证）。
+最近一次全量结果：`151 passed, 0 failed`；`profiles.mjs` 42 项全过（匹配语义、`profiles` 不泄漏计划正文、`state.profile` 命中/未命中、`run` 用 `profile`+`task` 自动定位窗口并解析 `{{alias}}`、未知画像/计划/窗口的报错）；`profile-live.mjs` 7 项全过（真机：`launch cmd` → profile 的 `match` 解析出 hwnd → 重放只读计划 → `readtext` 读到 400 字符，`strategy=uia`）；`targets.mjs` 38 项全过（vmrun/ssh argv、guest 真实退出码、二进制 `get` 字节一致、stdout 只留尾部）；`e2e.mjs` 观察链路 OK；`readtext.mjs` 10 项全过（控制台读到 400 字符、`waittext` 109 ms 命中提示符、`--trim` 1440×720 → 483×720 且 PNG 678 KB → 12 KB）；`plan.mjs` 9 项全过（5 步计划一次调用 108 字节 transcript、`done 5/5 in 1.2s`、失败时带上窗口尾部文本）；`panel.mjs` 27 项全过（无 token 401、目录外文件 404、`kill` 403、前缀挂载、客户端 bundle 注册 tab 与 settings section）；`console.mjs` 七步全过；`input.mjs` 两条闭环都 `MATCH`（`SendInput` 键盘与 UIA `SetValue`/`Invoke` 各自独立验证）。
 
 CI（`.github/workflows/ci.yml`，windows-latest）每次 push 会自动跑「编译桥 → 断言 `bin/cu.exe` 存在 → 143 项契约单测 → 38 项跨机适配单测 → 42 项画像单测」，并把编出来的 `cu.exe` 作为 artifact 上传。它只跑不抢焦点的部分，真机注入脚本 `console.mjs` / `input.mjs` / `plan.mjs` 需要人盯着，不进 CI。
 

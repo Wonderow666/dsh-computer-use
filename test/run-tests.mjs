@@ -602,11 +602,14 @@ console.log("\n[window by name, dry run, profile lint]");
     assert.ok(bad.problems.some((p) => /unknown step/.test(p)), JSON.stringify(bad.problems));
   });
 
-  await check("a profile that names an undefined alias fails the lint", async () => {
+  await check("an unresolved {{name}} is listed as a caller variable, not an error", async () => {
+    // The lint cannot know whether {{ghost}} is a typo or a value the caller
+    // passes with run {vars}. It reports it; the run itself still refuses an
+    // undefined placeholder (substitute() throws unknown alias).
     const t2 = boot({ profiles: [{ id: "aliased", match: { process: "notepad.exe" }, plans: { go: "type {{ghost}}" } }] });
     const r = text(await t2.execute({ action: "profiles", check: true }, {}));
-    eq(r.ok, false);
-    assert.ok(r.profiles[0].problems.some((p) => /\{\{ghost\}\}/.test(p)), JSON.stringify(r.profiles[0].problems));
+    eq(r.ok, true);
+    eq(r.profiles[0].callerVars, ["ghost"]);
   });
 }
 console.log("\n[launch inside a plan]");
@@ -746,6 +749,7 @@ console.log("\n[waiting for an event instead of polling]");
 console.log("\n[failure forensics]");
 {
   const t = boot({});
+  let firstDir = null;
 
   await check("a failed plan leaves a directory with the plan, the transcript and the pixels", async () => {
     const r = trans(await t.execute({ action: "run", window: "notepad", plan: "wait /definitely-not-there/ 60" }, {}));
@@ -753,6 +757,7 @@ console.log("\n[failure forensics]");
     const m = /forensics: (.+)$/m.exec(r);
     assert.ok(m, r);
     const dir = m[1].trim();
+    firstDir = dir;
     for (const f of ["plan.txt", "transcript.txt", "where.json"]) {
       assert.ok(fs.existsSync(path.join(dir, f)), `missing ${f} in ${dir}`);
     }
@@ -765,10 +770,13 @@ console.log("\n[failure forensics]");
 
   await check("the failures action lists what is on disk", async () => {
     // text() already parses; parsing a second time was why this test lied to
-    // itself on the first run with awaits in place.
-    const r = text(await t.execute({ action: "failures", limit: 5 }, {}));
+    // itself on the first run with awaits in place. Match the directory this
+    // section created - "the newest" belongs to whichever test ran last.
+    const r = text(await t.execute({ action: "failures", limit: 30 }, {}));
     assert.ok(r.count >= 1, JSON.stringify(r));
-    assert.ok(r.failures[0].dir && /definitely-not-there/.test(r.failures[0].stopped), JSON.stringify(r));
+    const mine = (r.failures || []).find((f) => f.dir === firstDir);
+    assert.ok(mine, `the list does not include ${firstDir}`);
+    assert.match(String(mine.stopped), /last ok:/);
   });
 
   await check("a plan that worked leaves nothing behind", async () => {
@@ -963,6 +971,68 @@ console.log("\n[loud defaults]");
   await assert.rejects(() => t.execute({ action: "focus", hwnd: "12345" }, {}), /no window with hwnd 12345 - it was closed or recreated/);
   cp.state.staleHwnd = null;
   await check("a stale hwnd is named as stale", () => {});
+}
+
+console.log("\n[verification by default]");
+{
+  const t = boot();
+
+  const okLine = trans(await t.execute({ action: "run", hwnd: "999001", plan: "assert /hello/ 2000" }, {}));
+  await check("assert shows the text that made it true", () => {
+    assert.match(okLine, /1 assert \/hello\/ ok :: .*hello/);
+    assert.doesNotMatch(okLine, /hint:/);
+  });
+
+  const failed = await t.execute({ action: "run", hwnd: "999001", plan: "press Save\nassert /nope-never/ 150" }, {});
+  await check("a failed step says what worked, what shows, and what next", () => {
+    const body = String(failed.text);
+    assert.match(body, /2 assert FAILED/);
+    assert.match(body, /last ok: 1 press "Save" via invoke/);
+    assert.match(body, /screen: "hello world/);
+    assert.match(body, /next: fix step 2/);
+    assert.match(body, /forensics:/);
+  });
+
+  const dry = text(await t.execute({ action: "run", dryRun: true, hwnd: "999001", plan: "press Save" }, {}));
+  await check("a dry run warns about a plan that never checks itself", () => {
+    eq(dry.warnings.length, 1);
+    assert.match(dry.warnings[0], /never checks it/);
+  });
+
+  const cleared = text(await t.execute({ action: "run", dryRun: true, hwnd: "999001", plan: "press Save\nassert /Saved/" }, {}));
+  await check("ending with assert clears the warning", () => eq(cleared.warnings.length, 0));
+
+  const tidy = trans(await t.execute({ action: "run", hwnd: "999001", plan: "press Save\nassert /Saved/ 2000" }, {}));
+  await check("a checked plan ends without a hint", () => {
+    assert.match(tidy, /2 assert \/Saved\/ ok/);
+    assert.doesNotMatch(tidy, /hint:/);
+  });
+}
+
+console.log("\n[recipes lint and dry run]");
+{
+  const recipes = path.join(ROOT, "profiles");
+  const t = boot({ profilesFile: recipes });
+
+  const listed = text(await t.execute({ action: "profiles" }, {}));
+  await check("the shipped recipes load", () => {
+    assert.ok(listed.profiles.some((p) => p.id === "eclipse"), JSON.stringify(listed.profiles.map((p) => p.id)));
+    assert.ok(listed.profiles.some((p) => p.id === "wps"));
+  });
+
+  const lint = text(await t.execute({ action: "profiles", check: true }, {}));
+  await check("a {{name}} meant for run {vars} is not a lint error", () => {
+    eq(lint.ok, true, JSON.stringify(lint.profiles.filter((p) => !p.ok)));
+    const edge = lint.profiles.find((p) => p.id === "edge-console");
+    assert.ok(edge && edge.callerVars && edge.callerVars.includes("url"), JSON.stringify(edge));
+  });
+
+  const dry = text(await t.execute({ action: "run", profile: "eclipse", task: "run", dryRun: true }, {}));
+  await check("a dry run works before the app is open, and says so", () => {
+    eq(dry.steps.length, 2);
+    assert.match(String(dry.warnings[0]), /matches no open window/);
+    eq(dry.target, null);
+  });
 }
 
 console.log("\n[engine failure]");

@@ -1,0 +1,55 @@
+{
+  "profiles": [
+    {
+      "id": "notepad",
+      "match": { "process": "notepad.exe" },
+      "notes": "Written and verified against the real Notepad. `start` is the same two lines the live tests use; `write` shows how a plan takes its text from `vars`.",
+      "plans": {
+        "start": ["launch C:\\Windows\\System32\\notepad.exe", "wait /无标题|Notepad|行 1|Line 1/ 8000", "sleep 400"],
+        "write": ["type {{text}}", "sleep 500", "assert /{{text}}/ 5000"],
+        "menu": ["press 文件", "wait /新建|New|另存为|Save as/ 3000", "key escape"],
+        "read": "read"
+      }
+    },
+    {
+      "id": "eclipse",
+      "match": { "process": "eclipse.exe" },
+      "notes": "From the lab6 run: Eclipse exposes its workbench tree, so `press`/`find` work; the Console maximises with a double click on its tab. Ctrl+F11 re-runs the last launch configuration.",
+      "plans": {
+        "open-resource": ["key ctrl+shift+r", "wait /Open Resource|打开资源/ 6000", "type {{file}}", "key return", "wait /{{file}}/ 10000"],
+        "run": ["key ctrl+f11", "wait /Console|控制台/ 10000"],
+        "console-text": ["press Console", "key ctrl+a", "key ctrl+c"]
+      }
+    },
+    {
+      "id": "wps",
+      "match": { "process": "wps.exe" },
+      "notes": "WPS Writer keeps the document text out of UIA, so every read here goes through the pixels (`ocr`) or a screenshot. Verified on the lab6 report: 24 pages, section headers legible at 100%.",
+      "plans": {
+        "open": ["launch F:\\WPS\\WPS Office\\12.1.0.29690\\office6\\wps.exe | {{file}}", "wait /WPS|文字/ 20000"],
+        "read-page": "read ocr",
+        "screenshot-page": "shot wps-page.png",
+        "next-page": ["key PageDown", "sleep 400", "shot wps-next.png"]
+      }
+    },
+    {
+      "id": "edge-console",
+      "match": { "title": "Microsoft Edge|Edge" },
+      "notes": "The COS console session ran on CDP, not pixels: goto, wait, click, fill, text. These plans keep that order; `{{url}}` comes from `vars`.",
+      "plans": {
+        "open": ["page goto {{url}}", "page wait body 15000", "page text body"],
+        "search": ["page fill input[name=q] | {{q}}", "page click input[type=submit]", "page wait #content_left 15000", "page text #content_left"]
+      }
+    },
+    {
+      "id": "packet-tracer",
+      "match": { "class": "Qt51516QWindowIcon", "title": "Packet Tracer" },
+      "notes": "The PT8 flow from the lab: the workspace list is the truth about devices, the palette re-arms per device, and the IOS console lives in its own window.",
+      "plans": {
+        "read-screen": "read ocr",
+        "workspace-list": "wait /Workspace List|工作区列表/ 8000",
+        "console-read": ["read ocr", "assert /Router>|Switch>|#/ 8000"]
+      }
+    }
+  ]
+}

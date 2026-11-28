@@ -288,3 +288,13 @@ Window 客户机别忘写 `shell: windows`：这样 `exec` 会走 `cmd.exe /c` +
 - hwnd 过期会回 `staleHwnd` 与"重新列窗口"的提示。应用重启后不要复用旧 hwnd，按标题用 `run {window:"..."}`。
 - `readtext` 为空会回 `hint`：要么 `readtext {ocr:true}`，要么 `ctrl+a`/`ctrl+c` 后 `clipboard get`。
 - 菜单栏与标题栏在客户区之外：`clickrel` 点不到它们，截图后用 `click { imgx, imgy }`。
+
+### 2.31 验证是默认的：assert、读回、失败摘要
+
+- 计划只要动了屏幕（`type`/`key`/`click`/`press`/`invoke`/`upload`/`launch`），结尾就写 `assert /re/` 或 `read`。
+  没写时计划会在结尾自己 `hint:` 一句，别忽略它。
+- `type` 已经默认读回：看到 `verified` 才算落地，看到 `(unverified: no text channel)` 就换 `readtext {ocr:true}` 或剪贴板，
+  不要假定字符已经在里面。
+- 失败先读三行：`last ok`（前面哪步是好的）、`screen`（停下时窗口上的字）、`next`（下一步该干什么）；
+  细节在 `forensics` 目录里，用 `action="failures"` 列出历史。
+- `dryRun` 返回 `warnings`：窗口没开会提示（`profileMissing`），计划从不校验也会提示。先 dry-run 再真跑。
