@@ -120,7 +120,20 @@ for (let i = 0; i < 40 && !landed.length; i++) {
 }
 check("a download lands in the directory we chose, under its own name", landed.includes("report.csv"), JSON.stringify(landed));
 
+// The same web flow, written as a plan: this is what makes it replayable.
+const pagePlan = await run({
+  action: "run",
+  plan: [
+    "page goto file:///" + page.replace(/\\/g, "/"),
+    "page wait #dl 5000",
+    "page click #b",
+    "page text #out"
+  ].join("\n")
+});
+check("a plan can drive the browser", /page wait #dl/.test(pagePlan.text) && /page click BUTTON/.test(pagePlan.text), String(pagePlan.text).replace(/\n/g, " | ").slice(0, 160));
+
 const badOp = await run({ action: "browser", browser: "frobnicate" }).catch((e) => ({ error: e.message }));
+
 check("an unknown browser command lists the known ones", /unknown browser command "frobnicate"/.test(String(badOp.error || "")), String(badOp.error || ""));
 
 console.log(failed ? `\n${failed} failed` : "\nall good");

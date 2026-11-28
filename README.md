@@ -642,6 +642,7 @@ until /已保存|Saved/ 8000 key ctrl+s
 | 执行一句 JS | `browser="eval document.title"` | `{value}` |
 | 页面截图 | `browser="shot login.png"` | `{image, bytes}` |
 | 上传文件 | `browser="upload input[type=file] | D:\\data\\a.csv"` | `{uploaded:{selector,file}}` |
+| 等元素出现 | `browser="wait #create 8000"` | `{selector, waitedMs}` |
 | 指定下载目录 | `browser="downloads D:\\data\\downloads"` | `{downloads}` |
 
 四条行为：
@@ -680,6 +681,38 @@ poll      → [ 'report.csv' ]   （guid 已被改名）
 ```
 
 顺带一句边界：浏览器能做的是"网页里的事"。系统弹窗、原生安装器、桌面软件，仍然归 `computer` 的其余 40 个 action。
+
+## 网页动作也能写进计划（v0.25.0）
+
+坐标会变、选择器不会，所以网页那半边的正确单位是"一步"，不是"一次点击"。`run` 的计划里现在有 `page` 动词，用的就是 `browser` 那一套命令：
+
+```yaml
+run:
+  profile: cos
+  plan: |
+    page goto https://console.cloud.tencent.com/cos
+    page wait #create 15000
+    page click #create
+    page fill input[name=bucket] | my-bucket-01
+    page text .bucket-list
+```
+
+它接住了三样东西：
+
+1. **重试**：`retry 3 page click #create`，或者 `until /my-bucket-01/ 15000 page text .bucket-list`——`until` 等的是页面文字，不是窗口文字，判定和桌面步骤共用同一套。
+2. **画像**：网页流程和桌面流程可以写在同一份 profile 里，`run { profile, task }` 一句话回放。
+3. **失败现场**：计划停在哪一步，图片、转写、`where.json` 照旧留在 `artifacts/failures/`；此时窗口是浏览器，截图就是页面。
+
+真机（headless Edge，锁屏）：
+
+```
+1 page goto file:///.../page.html complete
+2 page wait #dl 1ms
+3 page click BUTTON Create bucket
+4 page text #out 20ch
+```
+
+踩坑记在这里：`<a href="#" onclick="…">` 这种链接在 headless 里用真实鼠标点、用 `.click()` 点都可能不触发下载，而页面脚本里自己造 `<a download>` 一定触发。所以"下载"要测的是下载路径，不是那个链接可不可点。
 
 ## 可视化面板：人给模型指路
 

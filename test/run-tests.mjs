@@ -889,6 +889,14 @@ console.log("\n[browser by name]");
   await check("the browser parameter is documented", () => assert.ok((((def.parameters || {}).properties) || {}).browser));
   await assert.rejects(() => t.execute({ action: "browser" }, {}), /browser needs a command/);
   await check("a browser call without a command is a clear error", () => {});
+  const dry = await t.execute({ action: "run", dryRun: true, plan: "page goto about:blank\npage wait #ready 3000" }, {});
+  const parsed = JSON.parse(dry.text);
+  await check("a plan can carry the browser too", () => {
+    assert.strictEqual(parsed.steps.length, 2);
+    assert.strictEqual(parsed.steps[0].op, "page");
+    assert.strictEqual(parsed.steps[0].rest, "goto about:blank");
+    assert.strictEqual(parsed.steps[1].rest, "wait #ready 3000");
+  });
 }
 
 console.log("\n[engine failure]");
