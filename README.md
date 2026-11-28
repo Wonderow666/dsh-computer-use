@@ -663,6 +663,22 @@ shot       → 11,986 bytes
 upload     → files[0].name = "report.csv"
 ```
 
+### 下载要三步都对，文件才落盘（v0.24.1）
+
+Edge 158 会**静默忽略** `Browser.setDownloadBehavior {behavior:"allow"}`：文件照旧进 `C:\Users\...\Downloads`，没有任何报错。实测能用的组合是三步：
+
+1. `behavior: "allowAndName"`：文件先进你指定的目录，但**用 guid 当文件名**；
+2. 浏览器级 CDP 会话必须**一直开着**——一关，下载规则跟着消失，下一次点击又回到默认目录（这条最容易踩：设置完就 `close()` 看起来"成功"过一秒）；
+3. 监听 `Browser.downloadWillBegin` 拿 `suggestedFilename`，在 `downloadProgress` 变成 `completed` 时把 guid 改回真名。
+
+所以 `browser="downloads <dir>"` 之后不要自己断开：插件会保住那条会话，替你把 guid 改回去。真机：
+
+```
+downloads → dir C:\...\downloads
+click     → 页面触发 report.csv
+poll      → [ 'report.csv' ]   （guid 已被改名）
+```
+
 顺带一句边界：浏览器能做的是"网页里的事"。系统弹窗、原生安装器、桌面软件，仍然归 `computer` 的其余 40 个 action。
 
 ## 可视化面板：人给模型指路

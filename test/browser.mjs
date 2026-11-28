@@ -24,7 +24,19 @@ fs.writeFileSync(page, `<!doctype html><meta charset="utf-8"><title>dsh probe</t
 <button id="b" style="margin:40px;padding:12px 20px" onclick="document.title='clicked';document.getElementById('out').textContent='button was clicked'">Create bucket</button>
 <input id="t" style="margin:40px;padding:8px;width:320px" placeholder="name">
 <input id="f" type="file" style="margin:40px">
+<a id="dl" style="margin:40px;display:inline-block" href="#">Download report</a>
 <div id="out" style="margin:40px"></div>
+<script>
+document.getElementById("dl").onclick = (e) => {
+  e.preventDefault();
+  document.title = "downloading";
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob(["x,y\n7,8\n"], { type: "text/csv" }));
+  a.download = "report.csv";
+  document.body.appendChild(a);
+  a.click();
+};
+</script>
 </body>`, "utf8");
 const uploadFile = path.join(tmp, "report.csv");
 fs.writeFileSync(uploadFile, "a,b\n1,2\n", "utf8");
@@ -89,6 +101,24 @@ check("the tool's screenshot has pixels", Number(toolShot.bytes) > 2000, `${tool
 
 const up = await run({ action: "browser", browser: "upload #f | " + uploadFile });
 check("upload works through the tool", up.uploaded && /report\.csv$/.test(up.uploaded.file), JSON.stringify(up.uploaded || {}));
+
+const dlDir = path.join(tmp, "downloads");
+const dir = await run({ action: "browser", browser: "downloads " + dlDir });
+check("the download directory is accepted", String(dir.downloads || "").replace(/\\/g, "/").endsWith("/downloads"), String(dir.downloads));
+// The download itself is page JavaScript, not a click target: trigger it from
+// the page so this check measures the download path (allowAndName + rename),
+// not whether a file:// anchor happens to be clickable in headless Edge.
+const dlClick = await run({
+  action: "browser",
+  browser: "eval (() => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['x,y\\n7,8\\n'], { type: 'text/csv' })); a.download = 'report.csv'; document.body.appendChild(a); a.click(); return 'started'; })()"
+});
+check("the page started a download", dlClick.value === "started", String(dlClick.value));
+let landed = [];
+for (let i = 0; i < 40 && !landed.length; i++) {
+  await new Promise((r) => setTimeout(r, 250));
+  landed = fs.existsSync(dlDir) ? fs.readdirSync(dlDir).filter((f) => !f.endsWith(".crdownload")) : [];
+}
+check("a download lands in the directory we chose, under its own name", landed.includes("report.csv"), JSON.stringify(landed));
 
 const badOp = await run({ action: "browser", browser: "frobnicate" }).catch((e) => ({ error: e.message }));
 check("an unknown browser command lists the known ones", /unknown browser command "frobnicate"/.test(String(badOp.error || "")), String(badOp.error || ""));

@@ -235,6 +235,11 @@ Window 客户机别忘写 `shell: windows`：这样 `exec` 会走 `cmd.exe /c` +
 
 边界：只在"浏览器里的页面"有效。原生弹窗、安装器、桌面软件仍然用 `computer` 的其余动作。
 
+### 2.25 下载：允许命名，并且别关会话
+
+`allow` 在 Edge 158 是空操作；要用 `allowAndName`，并且把浏览器级 CDP 会话留住——它一关，规则就没了，文件回到用户的 Downloads。名字是 guid，靠 `downloadWillBegin` 的 `suggestedFilename` 在完成时改回来。
+
+
 ### 2.23 坐标只报一种
 
 看到什么问题：截图 1600 宽、屏幕 2560 宽、`relx/rely` 又是客户区坐标，三个数都像坐标，差 1.6 倍，点偏了才发现。
