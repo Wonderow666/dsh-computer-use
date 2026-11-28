@@ -1054,6 +1054,8 @@ CI（`.github/workflows/ci.yml`，windows-latest）每次 push 会自动跑「�
 
 ## 目录
 
+- [第一次用：先重启，再按顺序走一遍](docs/FIRST-RUN.md)
+
 ```text
 dsh-computer-use/
 ├─ lib/index.js          # 插件：手写 JSON Schema 参数 + 安全闸 + argv 映射（零第三方导入）

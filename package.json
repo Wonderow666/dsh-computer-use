@@ -1,88 +1,88 @@
 {
-  "name": "dsh-computer-use",
-  "version": "0.29.1",
-  "description": "Native Windows GUI control for DeepSeek Harness: screen capture, UI Automation tree, mouse and keyboard injection, app launch and kill, all behind one `computer` tool.",
-  "keywords": [
-    "dsh",
-    "dsh-plugin",
-    "deepseek-harness",
-    "computer-use",
-    "gui-automation",
-    "uiautomation",
-    "win32",
-    "sendinput",
-    "desktop-automation"
-  ],
-  "type": "module",
-  "main": "./lib/index.js",
-  "exports": {
-    ".": "./lib/index.js",
-    "./client": "./lib/client.js",
-    "./package.json": "./package.json"
-  },
-  "files": [
-    "lib",
-    "bin",
-    "bridge",
-    "build.ps1",
-    "cordis.patch.yml",
-    "README.md",
-    "LICENSE",
-    "profiles",
-    "tools",
-    "mcp"
-  ],
-  "scripts": {
-    "build": "powershell -ExecutionPolicy Bypass -File ./build.ps1",
-    "build:fixtures": "powershell -ExecutionPolicy Bypass -File ./build.ps1 -Test",
-    "test": "node test/run-tests.mjs",
-    "test:e2e": "node test/e2e.mjs",
-    "test:readtext": "node test/readtext.mjs",
-    "test:plan": "node test/plan.mjs",
-    "test:panel": "node test/panel.mjs",
-    "test:targets": "node test/targets.mjs",
-    "test:profiles": "node test/profiles.mjs",
-    "test:console": "node test/console.mjs",
-    "test:input": "node test/input.mjs",
-    "test:ocr": "node test/ocr.mjs",
-    "test:all": "node test/run-tests.mjs && node test/readtext.mjs && node test/panel.mjs && node test/targets.mjs && node test/profiles.mjs && node test/ocr.mjs",
-    "schema:cost": "node tools/schema-cost.mjs",
-    "test:forensics": "node test/forensics-live.mjs",
-    "test:press": "node test/press-live.mjs",
-    "test:watch": "node test/watch-live.mjs",
-    "mcp": "node mcp/server.mjs",
-    "test:mcp": "node test/mcp.mjs",
-    "test:see": "node test/see-live.mjs",
-    "test:upload": "node test/upload-live.mjs",
-    "test:browser": "node test/browser.mjs",
-    "test:type": "node test/type-live.mjs"
-  },
-  "engines": {
-    "node": ">=20"
-  },
-  "os": [
-    "win32"
-  ],
-  "author": "Wonderow666",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/Wonderow666/dsh-computer-use.git"
-  },
-  "homepage": "https://github.com/Wonderow666/dsh-computer-use#readme",
-  "bugs": {
-    "url": "https://github.com/Wonderow666/dsh-computer-use/issues"
-  },
-  "dsh": {
-    "bundle": {
-      "patch": "./cordis.patch.yml"
-    },
-    "client": {
-      "platform": "web",
-      "inject": [
-        "@deepseek-ai/dsh-client-runtime",
-        "@deepseek-ai/dsh-client-ui-slots"
-      ]
-    }
-  }
+    "name":  "dsh-computer-use",
+    "version":  "0.29.2",
+    "description":  "Native Windows GUI control for DeepSeek Harness: screen capture, UI Automation tree, mouse and keyboard injection, app launch and kill, all behind one `computer` tool.",
+    "keywords":  [
+                     "dsh",
+                     "dsh-plugin",
+                     "deepseek-harness",
+                     "computer-use",
+                     "gui-automation",
+                     "uiautomation",
+                     "win32",
+                     "sendinput",
+                     "desktop-automation"
+                 ],
+    "type":  "module",
+    "main":  "./lib/index.js",
+    "exports":  {
+                    ".":  "./lib/index.js",
+                    "./client":  "./lib/client.js",
+                    "./package.json":  "./package.json"
+                },
+    "files":  [
+                  "lib",
+                  "bin",
+                  "bridge",
+                  "build.ps1",
+                  "cordis.patch.yml",
+                  "README.md",
+                  "LICENSE",
+                  "profiles",
+                  "tools",
+                  "mcp"
+              ],
+    "scripts":  {
+                    "build":  "powershell -ExecutionPolicy Bypass -File ./build.ps1",
+                    "build:fixtures":  "powershell -ExecutionPolicy Bypass -File ./build.ps1 -Test",
+                    "test":  "node test/run-tests.mjs",
+                    "test:e2e":  "node test/e2e.mjs",
+                    "test:readtext":  "node test/readtext.mjs",
+                    "test:plan":  "node test/plan.mjs",
+                    "test:panel":  "node test/panel.mjs",
+                    "test:targets":  "node test/targets.mjs",
+                    "test:profiles":  "node test/profiles.mjs",
+                    "test:console":  "node test/console.mjs",
+                    "test:input":  "node test/input.mjs",
+                    "test:ocr":  "node test/ocr.mjs",
+                    "test:all":  "node test/run-tests.mjs \u0026\u0026 node test/readtext.mjs \u0026\u0026 node test/panel.mjs \u0026\u0026 node test/targets.mjs \u0026\u0026 node test/profiles.mjs \u0026\u0026 node test/ocr.mjs",
+                    "schema:cost":  "node tools/schema-cost.mjs",
+                    "test:forensics":  "node test/forensics-live.mjs",
+                    "test:press":  "node test/press-live.mjs",
+                    "test:watch":  "node test/watch-live.mjs",
+                    "mcp":  "node mcp/server.mjs",
+                    "test:mcp":  "node test/mcp.mjs",
+                    "test:see":  "node test/see-live.mjs",
+                    "test:upload":  "node test/upload-live.mjs",
+                    "test:browser":  "node test/browser.mjs",
+                    "test:type":  "node test/type-live.mjs"
+                },
+    "engines":  {
+                    "node":  "\u003e=20"
+                },
+    "os":  [
+               "win32"
+           ],
+    "author":  "Wonderow666",
+    "license":  "MIT",
+    "repository":  {
+                       "type":  "git",
+                       "url":  "git+https://github.com/Wonderow666/dsh-computer-use.git"
+                   },
+    "homepage":  "https://github.com/Wonderow666/dsh-computer-use#readme",
+    "bugs":  {
+                 "url":  "https://github.com/Wonderow666/dsh-computer-use/issues"
+             },
+    "dsh":  {
+                "bundle":  {
+                               "patch":  "./cordis.patch.yml"
+                           },
+                "client":  {
+                               "platform":  "web",
+                               "inject":  [
+                                              "@deepseek-ai/dsh-client-runtime",
+                                              "@deepseek-ai/dsh-client-ui-slots"
+                                          ]
+                           }
+            }
 }
