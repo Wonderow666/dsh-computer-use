@@ -269,3 +269,9 @@ Window 客户机别忘写 `shell: windows`：这样 `exec` 会走 `cmd.exe /c` +
 - `newtab URL`：开一个并设为当前；关掉用 `close`。
 - `dialog accept | dismiss`：`confirm`/`alert`/`prompt` 都要回答，否则页面永远停在那一刻。
 - 页面 socket 按 tab 复用，`Page` 域必须**在对话框弹出之前**就打开——所以别指望"临时连一下再回答"。
+
+### 2.28 读到 click-center，就不要再相信返回值
+
+`invoke` 在没有 UIA pattern 的控件上会点中心，这是兜底，不是 Invoke。返回里现在有 `degraded: "click-center"` 和一句 `why`，计划里也会写 `(no invoke pattern: clicked the centre)`。看到它，下一步必须是"看结果"（`readtext`、`state`、局部截图），而不是"再 invoke 一次"。
+
+同理：`screenshot { clientRegion }` 把客户区坐标的换算收进插件；视觉模型不可用时先试 `ocr`（本机 tesseract），不要自己拼命令行。

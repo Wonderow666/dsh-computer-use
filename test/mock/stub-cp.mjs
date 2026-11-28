@@ -19,6 +19,8 @@ export const state = {
   watch: null,
   // Tests say what `ui` exposes when the default two controls are not enough.
   ui: null,
+  // Tests say what `invoke` ran into: "invoke" (default) or "click-center".
+  invoke: null,
   failNext: null,
   typeVerify: null,
   // Tests flip this to simulate a locked workstation without touching anything else.
@@ -194,6 +196,11 @@ function payload(cmd, o) {
       return { ok: true, x: Number(o.x), y: Number(o.y), window: state.foreground };
     case "clip":
       return { ok: true, text: "clipboard contents" };
+    case "invoke":
+      // A control with a real UIA pattern says so; one without it clicks instead.
+      return state.invoke
+        ? { ...state.invoke, element: { role: "Button", name: "Save" } }
+        : { ok: true, pattern: "invoke", element: { role: "Button", name: "Save" } };
     default:
       return { ok: true };
   }

@@ -247,16 +247,40 @@ console.log("\n[invoke + dryRun]");
   await t.execute({ action: "invoke", hwnd: "656368", elementPath: "0.1.2", value: "v" }, {});
   await check("invoke forwards a value", () => eq(callOf("invoke")[1].argv[callOf("invoke")[1].argv.length - 1], "v"));
 
+  cp.state.invoke = { ok: true, pattern: "click-center" };
+  const degraded = text(await t.execute({ action: "invoke", hwnd: "656368", elementPath: "0.9.9" }, {}));
+  await check("an invoke without a pattern says it clicked instead", () => {
+    eq(degraded.pattern, "click-center");
+    eq(degraded.degraded, "click-center");
+    assert.ok(/verify the effect/.test(String(degraded.why)), String(degraded.why));
+  });
+  const planDeg = await t.execute({ action: "run", hwnd: "656368", plan: "invoke 0.1.2" }, {});
+  await check("a plan line says when invoke degraded", () => assert.ok(/no invoke pattern: clicked the centre/.test(planDeg.text), planDeg.text));
+  cp.state.invoke = null;
+
+  const shot = text(await t.execute({ action: "screenshot", hwnd: "999001", clientRegion: "10,20,300,200" }, {}));
+  await check("clientRegion is converted from the window's client origin", () => {
+    assert.ok(shot.ok, JSON.stringify(shot));
+    const argv = callOf("shot")[0].argv;
+    eq(argv[argv.indexOf("--region") + 1], "50,99,350,299");
+  });
+  await assert.rejects(
+    () => t.execute({ action: "screenshot", clientRegion: "0,0,10,10" }, {}),
+    /needs a target window/
+  );
+  await check("clientRegion without a window is refused", () => {});
+
   const d = text(await t.execute({ action: "click", x: 1, y: 2, dryRun: true }, {}));
   await check("dryRun returns argv without injecting", () => {
     eq(d.dryRun, true);
     assert.ok(d.argv.includes("click"));
     eq(callOf("click").length, 0);
   });
+  const focusBefore = callOf("focus").length;
   const d2 = text(await t.execute({ action: "click", title: "notepad", dryRun: true }, {}));
   await check("dryRun does not steal focus", () => {
     eq(d2.focused, false);
-    eq(callOf("focus").length, 0);
+    eq(callOf("focus").length, focusBefore);
   });
 }
 

@@ -744,6 +744,40 @@ ok   a confirm the page opened can be answered  {"ok":true,"accepted":true}
 ok   answering when nothing is open is a clear error  no dialog is open (No dialog is showing)
 ```
 
+## 三个默认值，现在会说出来（v0.27.0）
+
+三次复盘里最贵的错误都不是"点错了"，而是**返回值没有说清楚它做了什么**。这一版把三处默认值改成明说：
+
+**1. `invoke` 没有 UIA pattern 时会点中心，现在会自己承认。**
+
+控件不支持 Invoke/Toggle/Select/SetValue 时，引擎只能把鼠标移到控件中心点一下——这是必要的兜底（不点就等于放弃这类控件），但它不再是"看起来像 Invoke"：
+
+```json
+{ "ok": true, "pattern": "click-center", "degraded": "click-center",
+  "why": "the element has no invoke/toggle/select/setvalue pattern, so its centre was clicked - verify the effect instead of trusting the return" }
+```
+
+计划里的对应行也带出来：`invoke 0.1.2 click-center (no invoke pattern: clicked the centre)`。看到 `click-center` 就该去看结果，而不是相信返回值。
+
+**2. `screenshot { clientRegion: "x,y,w,h" }`：客户区坐标裁剪。**
+
+截图是物理像素，窗口的客户区是另一套坐标，中间还隔着 DPI。这个换算现在由插件做：
+
+```yaml
+screenshot:
+  hwnd: 723280
+  clientRegion: "0,0,400,300"
+```
+
+真机（2560×1600，DPI 150%）：`geom` 的 `clientOrigin` 是 `{320,149}`，上面这条返回 `{"x":320,"y":149,"w":400,"h":300,"bytes":10591}` —— 就是你要的那块客户区，没有 1.5 倍的手工乘法。缺 `hwnd` 时直接报 `clientRegion needs a target window`。
+
+**3. 工具描述里写死了两条优先级。**
+
+- **视觉模型不可用时用 `ocr`**：它跑本机 tesseract，没有限流、不经过宿主的 vision 路由。以前只在描述里写"应用不给文本时用 ocr"，现在补了"视觉模型不可用时也用它"——因为有人为此自己写了 `shotocr.ps1`。
+- **网页先走 `browser`**：这条 v0.24.0 就写进去了，这次把它和 `invoke` 的降级说明放在同一段，让"名字优先、坐标最后"成为默认顺序。
+
+回归：`run-tests 139`、`profiles 42`、`targets 38`、`browser live` 全绿；schema 11,154 字符/请求（+303，全部花在这三处说明上）。
+
 ## 可视化面板：人给模型指路
 
 模型不需要"看着屏幕操作"，但**人需要看着屏幕给模型指路**。面板做四件事：按需截图 → 点一下查这个点是什么控件 → 列出可操作控件 → 记动作日志。
@@ -882,9 +916,9 @@ node test\console.mjs
 node test\input.mjs
 ```
 
-最近一次全量结果：`135 passed, 0 failed`；`profiles.mjs` 42 项全过（匹配语义、`profiles` 不泄漏计划正文、`state.profile` 命中/未命中、`run` 用 `profile`+`task` 自动定位窗口并解析 `{{alias}}`、未知画像/计划/窗口的报错）；`profile-live.mjs` 7 项全过（真机：`launch cmd` → profile 的 `match` 解析出 hwnd → 重放只读计划 → `readtext` 读到 400 字符，`strategy=uia`）；`targets.mjs` 38 项全过（vmrun/ssh argv、guest 真实退出码、二进制 `get` 字节一致、stdout 只留尾部）；`e2e.mjs` 观察链路 OK；`readtext.mjs` 10 项全过（控制台读到 400 字符、`waittext` 109 ms 命中提示符、`--trim` 1440×720 → 483×720 且 PNG 678 KB → 12 KB）；`plan.mjs` 9 项全过（5 步计划一次调用 108 字节 transcript、`done 5/5 in 1.2s`、失败时带上窗口尾部文本）；`panel.mjs` 27 项全过（无 token 401、目录外文件 404、`kill` 403、前缀挂载、客户端 bundle 注册 tab 与 settings section）；`console.mjs` 七步全过；`input.mjs` 两条闭环都 `MATCH`（`SendInput` 键盘与 UIA `SetValue`/`Invoke` 各自独立验证）。
+最近一次全量结果：`139 passed, 0 failed`；`profiles.mjs` 42 项全过（匹配语义、`profiles` 不泄漏计划正文、`state.profile` 命中/未命中、`run` 用 `profile`+`task` 自动定位窗口并解析 `{{alias}}`、未知画像/计划/窗口的报错）；`profile-live.mjs` 7 项全过（真机：`launch cmd` → profile 的 `match` 解析出 hwnd → 重放只读计划 → `readtext` 读到 400 字符，`strategy=uia`）；`targets.mjs` 38 项全过（vmrun/ssh argv、guest 真实退出码、二进制 `get` 字节一致、stdout 只留尾部）；`e2e.mjs` 观察链路 OK；`readtext.mjs` 10 项全过（控制台读到 400 字符、`waittext` 109 ms 命中提示符、`--trim` 1440×720 → 483×720 且 PNG 678 KB → 12 KB）；`plan.mjs` 9 项全过（5 步计划一次调用 108 字节 transcript、`done 5/5 in 1.2s`、失败时带上窗口尾部文本）；`panel.mjs` 27 项全过（无 token 401、目录外文件 404、`kill` 403、前缀挂载、客户端 bundle 注册 tab 与 settings section）；`console.mjs` 七步全过；`input.mjs` 两条闭环都 `MATCH`（`SendInput` 键盘与 UIA `SetValue`/`Invoke` 各自独立验证）。
 
-CI（`.github/workflows/ci.yml`，windows-latest）每次 push 会自动跑「编译桥 → 断言 `bin/cu.exe` 存在 → 135 项契约单测 → 38 项跨机适配单测 → 42 项画像单测」，并把编出来的 `cu.exe` 作为 artifact 上传。它只跑不抢焦点的部分，真机注入脚本 `console.mjs` / `input.mjs` / `plan.mjs` 需要人盯着，不进 CI。
+CI（`.github/workflows/ci.yml`，windows-latest）每次 push 会自动跑「编译桥 → 断言 `bin/cu.exe` 存在 → 139 项契约单测 → 38 项跨机适配单测 → 42 项画像单测」，并把编出来的 `cu.exe` 作为 artifact 上传。它只跑不抢焦点的部分，真机注入脚本 `console.mjs` / `input.mjs` / `plan.mjs` 需要人盯着，不进 CI。
 
 `bin/cu.exe` 也可以单独用，方便排查（它自己就是命令行程序，JSON 打到 stdout）：
 
