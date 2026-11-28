@@ -714,6 +714,36 @@ run:
 
 踩坑记在这里：`<a href="#" onclick="…">` 这种链接在 headless 里用真实鼠标点、用 `.click()` 点都可能不触发下载，而页面脚本里自己造 `<a download>` 一定触发。所以"下载"要测的是下载路径，不是那个链接可不可点。
 
+## 标签页、历史和对话框（v0.26.0）
+
+网页流程被打断，多半不是"点错了"，而是**页面换了地方**：新标签打开了、跳到上一页了、弹了个 `confirm` 把渲染进程按住不动。这三种现在都有名字：
+
+```yaml
+browser: "tabs"                        # 0:控制台 | 1:对象存储
+browser: "tab 1"                        # 按序号
+browser: "tab 对象存储"                  # 或者按标题/URL 的子串
+browser: "newtab https://example.com"   # 开一个，并把它设为当前
+browser: "close"                        # 关当前
+browser: "back" / "forward" / "reload"
+browser: "dialog accept"                # 或 "dialog dismiss"，prompt 可以 "dialog accept 我的名字"
+```
+
+三条行为值得知道：
+
+1. **当前标签是粘的**。`tab` 选过之后，后面的 `goto`/`click`/`fill`/`text`/`shot` 都作用在它上面，不用每条命令都重复说一遍。
+2. **新标签不一定排在最后**。`/json/list` 的顺序是浏览器给的，所以 `newtab` 之后是按 `targetId` 找到它、再设为当前——不是"取最后一个"。
+3. **对话框必须在开它的那个会话上回答**。页面 socket 现在按 tab 复用：`Page` 域在会话建立时就打开，`confirm` 弹出来之后 `dialog accept` 才等得到回应。否则只能等到超时——而超时的现象是"整页不动"，不是"没这个对话框"。
+
+真机（headless Edge，锁屏）：
+
+```
+ok   a new tab opens and becomes the active one  2 tabs, active 1
+ok   a tab can be picked by its url  file:///.../page.html
+ok   no tab "99": 0:about:blank | 1:clicked
+ok   a confirm the page opened can be answered  {"ok":true,"accepted":true}
+ok   answering when nothing is open is a clear error  no dialog is open (No dialog is showing)
+```
+
 ## 可视化面板：人给模型指路
 
 模型不需要"看着屏幕操作"，但**人需要看着屏幕给模型指路**。面板做四件事：按需截图 → 点一下查这个点是什么控件 → 列出可操作控件 → 记动作日志。
@@ -852,9 +882,9 @@ node test\console.mjs
 node test\input.mjs
 ```
 
-最近一次全量结果：`134 passed, 0 failed`；`profiles.mjs` 42 项全过（匹配语义、`profiles` 不泄漏计划正文、`state.profile` 命中/未命中、`run` 用 `profile`+`task` 自动定位窗口并解析 `{{alias}}`、未知画像/计划/窗口的报错）；`profile-live.mjs` 7 项全过（真机：`launch cmd` → profile 的 `match` 解析出 hwnd → 重放只读计划 → `readtext` 读到 400 字符，`strategy=uia`）；`targets.mjs` 38 项全过（vmrun/ssh argv、guest 真实退出码、二进制 `get` 字节一致、stdout 只留尾部）；`e2e.mjs` 观察链路 OK；`readtext.mjs` 10 项全过（控制台读到 400 字符、`waittext` 109 ms 命中提示符、`--trim` 1440×720 → 483×720 且 PNG 678 KB → 12 KB）；`plan.mjs` 9 项全过（5 步计划一次调用 108 字节 transcript、`done 5/5 in 1.2s`、失败时带上窗口尾部文本）；`panel.mjs` 27 项全过（无 token 401、目录外文件 404、`kill` 403、前缀挂载、客户端 bundle 注册 tab 与 settings section）；`console.mjs` 七步全过；`input.mjs` 两条闭环都 `MATCH`（`SendInput` 键盘与 UIA `SetValue`/`Invoke` 各自独立验证）。
+最近一次全量结果：`135 passed, 0 failed`；`profiles.mjs` 42 项全过（匹配语义、`profiles` 不泄漏计划正文、`state.profile` 命中/未命中、`run` 用 `profile`+`task` 自动定位窗口并解析 `{{alias}}`、未知画像/计划/窗口的报错）；`profile-live.mjs` 7 项全过（真机：`launch cmd` → profile 的 `match` 解析出 hwnd → 重放只读计划 → `readtext` 读到 400 字符，`strategy=uia`）；`targets.mjs` 38 项全过（vmrun/ssh argv、guest 真实退出码、二进制 `get` 字节一致、stdout 只留尾部）；`e2e.mjs` 观察链路 OK；`readtext.mjs` 10 项全过（控制台读到 400 字符、`waittext` 109 ms 命中提示符、`--trim` 1440×720 → 483×720 且 PNG 678 KB → 12 KB）；`plan.mjs` 9 项全过（5 步计划一次调用 108 字节 transcript、`done 5/5 in 1.2s`、失败时带上窗口尾部文本）；`panel.mjs` 27 项全过（无 token 401、目录外文件 404、`kill` 403、前缀挂载、客户端 bundle 注册 tab 与 settings section）；`console.mjs` 七步全过；`input.mjs` 两条闭环都 `MATCH`（`SendInput` 键盘与 UIA `SetValue`/`Invoke` 各自独立验证）。
 
-CI（`.github/workflows/ci.yml`，windows-latest）每次 push 会自动跑「编译桥 → 断言 `bin/cu.exe` 存在 → 123 项契约单测 → 38 项跨机适配单测 → 42 项画像单测」，并把编出来的 `cu.exe` 作为 artifact 上传。它只跑不抢焦点的部分，真机注入脚本 `console.mjs` / `input.mjs` / `plan.mjs` 需要人盯着，不进 CI。
+CI（`.github/workflows/ci.yml`，windows-latest）每次 push 会自动跑「编译桥 → 断言 `bin/cu.exe` 存在 → 135 项契约单测 → 38 项跨机适配单测 → 42 项画像单测」，并把编出来的 `cu.exe` 作为 artifact 上传。它只跑不抢焦点的部分，真机注入脚本 `console.mjs` / `input.mjs` / `plan.mjs` 需要人盯着，不进 CI。
 
 `bin/cu.exe` 也可以单独用，方便排查（它自己就是命令行程序，JSON 打到 stdout）：
 

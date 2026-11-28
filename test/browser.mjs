@@ -136,6 +136,24 @@ const badOp = await run({ action: "browser", browser: "frobnicate" }).catch((e) 
 
 check("an unknown browser command lists the known ones", /unknown browser command "frobnicate"/.test(String(badOp.error || "")), String(badOp.error || ""));
 
+// --- tabs, history, dialogs: the three things that used to break a flow ---
+const fresh = await run({ action: "browser", browser: "newtab about:blank" });
+check("a new tab opens and becomes the active one", fresh.active === fresh.tabs.length - 1 && fresh.tabs.length >= 2, `${fresh.tabs.length} tabs, active ${fresh.active}`);
+const backToPage = await run({ action: "browser", browser: "tab page.html" });
+check("a tab can be picked by its url", /page\.html$/.test(String(backToPage.tab && backToPage.tab.url || "")), String(backToPage.tab && backToPage.tab.url));
+const missingTab = await run({ action: "browser", browser: "tab 99" }).catch((e) => ({ error: e.message }));
+check("a tab that is not there says which ones are", /no tab "99"/.test(String(missingTab.error || "")), String(missingTab.error || ""));
+
+const reloaded = await run({ action: "browser", browser: "reload" });
+check("reload brings the page back", /page\.html$/.test(String(reloaded.url || "")), String(reloaded.url));
+
+await run({ action: "browser", browser: "eval setTimeout(() => confirm('ok?'), 30), 'armed'" });
+await new Promise((r) => setTimeout(r, 400));
+const ans = await run({ action: "browser", browser: "dialog accept" }).catch((e) => ({ error: e.message }));
+check("a confirm the page opened can be answered", ans.accepted === true, JSON.stringify(ans));
+const noDialog = await run({ action: "browser", browser: "dialog dismiss" }).catch((e) => ({ error: e.message }));
+check("answering when nothing is open is a clear error", /no dialog is open/.test(String(noDialog.error || "")), String(noDialog.error || ""));
+
 console.log(failed ? `\n${failed} failed` : "\nall good");
 // A browser we started is ours to stop; one we merely attached to is not.
 if (info.spawned && info.pid) {
