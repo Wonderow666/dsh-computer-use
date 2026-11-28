@@ -221,6 +221,20 @@ Window 客户机别忘写 `shell: windows`：这样 `exec` 会走 `cmd.exe /c` +
 
 判据：**一次 dry-run 的代价是一次 `windows` 调用**，一次真跑的代价是几分钟、几次截图、以及一个可能已经点错的面板。
 
+### 2.24 网页用选择器，不用坐标
+
+看到什么问题：网页控制台里按钮有名字，屏幕上是像素；窗口一变、滚动一下，坐标全废。上一轮实训在腾讯云 COS 开通页上浪费的点击，全是这个原因。
+
+怎么做：
+
+1. 先 `browser="open"`（必要时加 `headless`），再用 `browser="tabs"` 确认连到了哪个页面；
+2. 定位一律用 CSS 选择器：`click SELECTOR` / `fill SELECTOR | 值` / `text [SELECTOR]`；
+3. 需要确认状态就 `eval` 一句 JS（`location.href`、`document.title`、某个元素的文本），别去截图猜；
+4. 文件上传用 `upload SELECTOR | PATH`（走 `DOM.setFileInputFiles`，没有系统对话框）；
+5. 需要下载时先 `downloads DIR`，文件就落在你指定的目录，而不是 profile 深处。
+
+边界：只在"浏览器里的页面"有效。原生弹窗、安装器、桌面软件仍然用 `computer` 的其余动作。
+
 ### 2.23 坐标只报一种
 
 看到什么问题：截图 1600 宽、屏幕 2560 宽、`relx/rely` 又是客户区坐标，三个数都像坐标，差 1.6 倍，点偏了才发现。

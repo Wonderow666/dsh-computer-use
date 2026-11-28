@@ -50,7 +50,7 @@ dsh plugin --profile desktop add link:F:\path\to\dsh-computer-use
 
 重启后模型侧多出一个 `computer` 工具。插件配置在 `cordis.patch.yml`（`blockedProcesses`、`refuseFullscreenForeground`、`allowProcessControl`、`timeoutMs`、`enginePath`、`artifactsDir`），profile 自己的 `cordis.patch.yml` 可以按 id 覆盖这些字段。
 
-## 工具面（单一 `computer`，40 个 action）
+## 工具面（单一 `computer`，41 个 action）
 
 | 类别 | action | 返回 |
 | --- | --- | --- |
@@ -625,6 +625,46 @@ until /已保存|Saved/ 8000 key ctrl+s
 
 最后一条：控件 `invoke` 失败现在会**带着原因**回退到真实点击（`{"how":"click","invokeFailed":"ElementNotAvailableException…"}`）。虚拟列表回收元素时矩形仍然是对的——失败是事实，不该被吞掉。
 
+## 浏览器：用名字，不用坐标（v0.24.0）
+
+网页控制台是桌面控制最不划算的地方：DOM 里每个按钮都有名字，屏幕上它们只是一堆像素。改一个窗口大小，昨天的坐标就全废了；而 `button[data-testid=create]` 明天还在。
+
+所以插件里加了一条不经过鼠标的路：**Chrome DevTools Protocol**，Node 自带的 `WebSocket` 直连，不装 Playwright、不加依赖。它开着普通浏览器（Edge/Chrome 都行），用 `--remote-debugging-port` 暴露一个本地端口，插件连上去发命令。
+
+| 想做什么 | 怎么写 | 回来什么 |
+| --- | --- | --- |
+| 起一个可调试的浏览器 | `computer action=browser browser="open"` | `{port, spawned, browser, tabs}` |
+| 看有哪些标签页 | `browser="tabs"` | `{tabs:[{i,title,url}]}` |
+| 打开网址 | `browser="goto https://console.cloud.tencent.com/cos"` | `{url, state, title}` |
+| 点一个按钮 | `browser="click button[type=submit]"` | `{clicked:{selector,tag,text}}` |
+| 填一个输入框 | `browser="fill #bucket-name | my-bucket-01"` | `{filled:{selector,value}}` |
+| 读页面文字 | `browser="text main"`（省略选择器 = 整页） | `{chars, text}` |
+| 执行一句 JS | `browser="eval document.title"` | `{value}` |
+| 页面截图 | `browser="shot login.png"` | `{image, bytes}` |
+| 上传文件 | `browser="upload input[type=file] | D:\\data\\a.csv"` | `{uploaded:{selector,file}}` |
+| 指定下载目录 | `browser="downloads D:\\data\\downloads"` | `{downloads}` |
+
+四条行为：
+
+1. **点击是真的鼠标事件**（`Input.dispatchMouseEvent` 落在元素矩形中心），不是 `element.click()` 骗自己；先 `scrollIntoView`，所以滚出视野的元素也能点。
+2. **填值走原生 setter**，再补 `input`/`change` 事件——React、Vue 的受控输入框认这个，直接 `el.value = x` 不认。
+3. **上传不走对话框**：`DOM.setFileInputFiles` 把文件直接塞进 `<input type=file>`，没有"选择文件"框要过。
+4. **锁屏也能用**：它不求 Windows 移动光标，所以屏幕锁着时它照常工作——这恰好补上桌面控制在锁屏时彻底失效的空白。
+
+它开的浏览器有自己的 profile（`artifacts/browser/profile`），第一次登录后 cookie 会留着；要复用人已经登录的窗口，得人自己用 `--remote-debugging-port=9222` 启动一次浏览器，然后 `browser="tabs"` 就能看见那些标签页。
+
+真机（headless Edge 158，本地页面，屏锁着）：
+
+```
+open       → port 9333, spawned true, Edg/158.0.4370.45
+click #b   → BUTTON at 104,62 → document.title 从 "dsh probe" 变成 "clicked"
+fill #t    → "my-bucket-01"
+shot       → 11,986 bytes
+upload     → files[0].name = "report.csv"
+```
+
+顺带一句边界：浏览器能做的是"网页里的事"。系统弹窗、原生安装器、桌面软件，仍然归 `computer` 的其余 40 个 action。
+
 ## 可视化面板：人给模型指路
 
 模型不需要"看着屏幕操作"，但**人需要看着屏幕给模型指路**。面板做四件事：按需截图 → 点一下查这个点是什么控件 → 列出可操作控件 → 记动作日志。
@@ -763,7 +803,7 @@ node test\console.mjs
 node test\input.mjs
 ```
 
-最近一次全量结果：`131 passed, 0 failed`；`profiles.mjs` 42 项全过（匹配语义、`profiles` 不泄漏计划正文、`state.profile` 命中/未命中、`run` 用 `profile`+`task` 自动定位窗口并解析 `{{alias}}`、未知画像/计划/窗口的报错）；`profile-live.mjs` 7 项全过（真机：`launch cmd` → profile 的 `match` 解析出 hwnd → 重放只读计划 → `readtext` 读到 400 字符，`strategy=uia`）；`targets.mjs` 38 项全过（vmrun/ssh argv、guest 真实退出码、二进制 `get` 字节一致、stdout 只留尾部）；`e2e.mjs` 观察链路 OK；`readtext.mjs` 10 项全过（控制台读到 400 字符、`waittext` 109 ms 命中提示符、`--trim` 1440×720 → 483×720 且 PNG 678 KB → 12 KB）；`plan.mjs` 9 项全过（5 步计划一次调用 108 字节 transcript、`done 5/5 in 1.2s`、失败时带上窗口尾部文本）；`panel.mjs` 27 项全过（无 token 401、目录外文件 404、`kill` 403、前缀挂载、客户端 bundle 注册 tab 与 settings section）；`console.mjs` 七步全过；`input.mjs` 两条闭环都 `MATCH`（`SendInput` 键盘与 UIA `SetValue`/`Invoke` 各自独立验证）。
+最近一次全量结果：`134 passed, 0 failed`；`profiles.mjs` 42 项全过（匹配语义、`profiles` 不泄漏计划正文、`state.profile` 命中/未命中、`run` 用 `profile`+`task` 自动定位窗口并解析 `{{alias}}`、未知画像/计划/窗口的报错）；`profile-live.mjs` 7 项全过（真机：`launch cmd` → profile 的 `match` 解析出 hwnd → 重放只读计划 → `readtext` 读到 400 字符，`strategy=uia`）；`targets.mjs` 38 项全过（vmrun/ssh argv、guest 真实退出码、二进制 `get` 字节一致、stdout 只留尾部）；`e2e.mjs` 观察链路 OK；`readtext.mjs` 10 项全过（控制台读到 400 字符、`waittext` 109 ms 命中提示符、`--trim` 1440×720 → 483×720 且 PNG 678 KB → 12 KB）；`plan.mjs` 9 项全过（5 步计划一次调用 108 字节 transcript、`done 5/5 in 1.2s`、失败时带上窗口尾部文本）；`panel.mjs` 27 项全过（无 token 401、目录外文件 404、`kill` 403、前缀挂载、客户端 bundle 注册 tab 与 settings section）；`console.mjs` 七步全过；`input.mjs` 两条闭环都 `MATCH`（`SendInput` 键盘与 UIA `SetValue`/`Invoke` 各自独立验证）。
 
 CI（`.github/workflows/ci.yml`，windows-latest）每次 push 会自动跑「编译桥 → 断言 `bin/cu.exe` 存在 → 123 项契约单测 → 38 项跨机适配单测 → 42 项画像单测」，并把编出来的 `cu.exe` 作为 artifact 上传。它只跑不抢焦点的部分，真机注入脚本 `console.mjs` / `input.mjs` / `plan.mjs` 需要人盯着，不进 CI。
 

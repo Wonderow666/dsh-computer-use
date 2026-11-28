@@ -880,6 +880,17 @@ console.log("\n[coordinates, retries, uploads]");
   await check("upload refuses a path that is not there", () => {});
 }
 
+console.log("\n[browser by name]");
+{
+  const t = boot();
+  const def = t.definition || t.def || t;
+  const enumList = (((def.parameters || {}).properties || {}).action || {}).enum || [];
+  await check("the action list offers the browser", () => assert.ok(enumList.includes("browser"), `${enumList.length} actions`));
+  await check("the browser parameter is documented", () => assert.ok((((def.parameters || {}).properties) || {}).browser));
+  await assert.rejects(() => t.execute({ action: "browser" }, {}), /browser needs a command/);
+  await check("a browser call without a command is a clear error", () => {});
+}
+
 console.log("\n[engine failure]");
 {
   const t = boot({ timeoutMs: 5000 });
