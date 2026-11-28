@@ -886,6 +886,9 @@ next: fix step 1 and rerun, or action="failures" to list what was saved
 配方里的 `{{name}}` 由 `run { profile, vars: { name: "…" } }` 填；`profiles { check: true }` 会把这些
 占位符记为 `callerVars` 而不是错误——它们本来就该由调用方给。
 
+真机各跑了一遍：`edge-console` 的 `open` 3/3（0.1s）、`search` 4/4（fill → click → wait → text），
+`notepad` 的 `start` 3/3、`write` 3/3（`type … verified` + `assert` 命中）、`menu` 3/3——没有一次像素点击。
+
 ## 可视化面板：人给模型指路
 
 模型不需要"看着屏幕操作"，但**人需要看着屏幕给模型指路**。面板做四件事：按需截图 → 点一下查这个点是什么控件 → 列出可操作控件 → 记动作日志。

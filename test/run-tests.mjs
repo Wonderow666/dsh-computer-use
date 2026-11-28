@@ -1033,6 +1033,21 @@ console.log("\n[recipes lint and dry run]");
     assert.match(String(dry.warnings[0]), /matches no open window/);
     eq(dry.target, null);
   });
+
+  // A recipe is data, and its anchors are compared against what the app
+  // actually says. If the file is ever written with the wrong encoding, the
+  // Chinese anchors rot into mojibake and the plan silently matches nothing,
+  // so hold the bytes to the exact strings the live tests saw.
+  const raw = JSON.parse(fs.readFileSync(path.join(recipes, "recipes.json"), "utf8"));
+  const byId = (id) => raw.profiles.find((p) => p.id === id);
+  await check("the recipe anchors survive as the characters the app prints", () => {
+    eq(byId("notepad").plans.menu[0], "press 文件");
+    eq(byId("notepad").plans.start[1], "wait /无标题|Notepad|行 1|Line 1/ 8000");
+    assert.match(byId("eclipse").plans.run[1], /控制台/);
+    assert.match(byId("packet-tracer").plans["workspace-list"], /工作区列表/);
+    assert.ok(!/\uFFFD/.test(JSON.stringify(raw)), "replacement characters in recipes.json");
+    assert.ok(!/锟|鏂囦欢|宸ヤ綔/.test(JSON.stringify(raw)), "mojibake in recipes.json");
+  });
 }
 
 console.log("\n[engine failure]");
