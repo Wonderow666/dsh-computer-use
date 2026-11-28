@@ -279,3 +279,12 @@ Window 客户机别忘写 `shell: windows`：这样 `exec` 会走 `cmd.exe /c` +
 ### 2.29 弹出来的框，要先问是谁的
 
 桌面上可能同时有好几个 `#32770`。`upload` 现在只认前台应用的框，并在一个可用框都没有时报出候选与进程名。真机上的反例是 wegame 的 `no_active_wnd`：可见、enabled、标题没有意义，路径打进去就消失——遇到"上传成功但文件没开"，先看返回的 `dialogPid` 是不是你要的那个应用。
+
+### 2.30 空结果、过期句柄、点不动的菜单
+
+三件事各有各的说法，别再猜：
+
+- `wait` 返回 `{ok,sleptMs}`；它只是睡，不是等。要等状态用 `wait /文字/` 或 `watch`。
+- hwnd 过期会回 `staleHwnd` 与"重新列窗口"的提示。应用重启后不要复用旧 hwnd，按标题用 `run {window:"..."}`。
+- `readtext` 为空会回 `hint`：要么 `readtext {ocr:true}`，要么 `ctrl+a`/`ctrl+c` 后 `clipboard get`。
+- 菜单栏与标题栏在客户区之外：`clickrel` 点不到它们，截图后用 `click { imgx, imgy }`。

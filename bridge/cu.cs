@@ -56,6 +56,7 @@ static class Native
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowTextW(IntPtr h, StringBuilder sb, int max);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassNameW(IntPtr h, StringBuilder sb, int max);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+    [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr h);
     [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
     [DllImport("user32.dll")] public static extern bool IsZoomed(IntPtr h);
     [DllImport("user32.dll")] public static extern bool IsWindowEnabled(IntPtr h);
@@ -287,7 +288,13 @@ static class Program
                 case "clip": Clip(c); break;
                 case "invoke": Invoke(c); break;
                 case "mark": Mark(c); break;
-                case "wait": Thread.Sleep(Math.Max(0, c.I("ms", 500))); break;
+                case "wait":
+                    {
+                        int ms = Math.Max(0, c.I("ms", 500));
+                        Thread.Sleep(ms);
+                        Emit("{\"ok\":true,\"sleptMs\":" + ms.ToString(CultureInfo.InvariantCulture) + "}");
+                        break;
+                    }
                 default: Err("unknown command: " + c.Name); return 2;
             }
             return 0;
@@ -2728,6 +2735,19 @@ static class Program
     static void Focus(Cmd c)
     {
         IntPtr h = MustHwnd(c);
+        // An hwnd is a handle, not a name: apps recreate windows on restart and
+        // the old number then belongs to nothing. Say that instead of blaming
+        // the foreground rules for a window that no longer exists.
+        if (!Native.IsWindow(h))
+        {
+            StringBuilder gone = new StringBuilder();
+            gone.Append("{\"ok\":false,\"error\":")
+                .Append(J.S("no window with hwnd " + h.ToInt64() + " - it was closed or recreated; list windows again (or target it by title with run {window:...})"))
+                .Append(",\"staleHwnd\":").Append(h.ToInt64().ToString(CultureInfo.InvariantCulture))
+                .Append('}');
+            Emit(gone.ToString());
+            return;
+        }
         // SWP_SHOWWINDOW instead of ShowWindow: a parent that spawns this engine
         // with STARTUPINFO.wShowWindow = SW_HIDE (windowsHide) has its value
         // substituted into the first ShowWindow call on that window - which

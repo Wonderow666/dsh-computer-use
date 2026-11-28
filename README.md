@@ -744,6 +744,44 @@ ok   a confirm the page opened can be answered  {"ok":true,"accepted":true}
 ok   answering when nothing is open is a clear error  no dialog is open (No dialog is showing)
 ```
 
+## 三个"没有"，现在也会说话（v0.28.0）
+
+三次真机任务（Eclipse + WPS）撞到的是同一类问题：**动作没输出、窗柄过期、文本读不出来**，而返回值都不解释。
+
+**1. `wait` 以前什么都不返回。**
+
+引擎的 `wait` 只是 `Thread.Sleep`，一行输出都没有；插件拿到空 stdout 就报 `computer engine failed (exit 0): no output`，看起来像引擎坏了。现在它返回：
+
+```json
+{"ok":true,"sleptMs":150}
+```
+
+（仍然建议优先用 `wait /文字/` 与 `watch`：睡固定时长是"赌时间"，不是等待。）
+
+**2. 过期的 hwnd 会被点名。**
+
+应用重启后窗口句柄就换了。以前拿旧 hwnd 调 `focus`/`run`，报的是"Windows 不让你抢前台"——一个把人引向错误方向的说法。现在：
+
+```json
+{"ok":false,"staleHwnd":12345,
+ "error":"no window with hwnd 12345 - it was closed or recreated; list windows again (or target it by title with run {window:...})"}
+```
+
+**3. `readtext` 读到空时，会告诉你还能去哪读。**
+
+自绘界面的文本通道可能是空的。这时返回里多一句：
+
+```json
+{"chars":0,"text":"",
+ "hint":"this window exposes no text: readtext {ocr:true} reads the pixels, or press ctrl+a / ctrl+c and take it with clipboard"}
+```
+
+**顺带把 `clickrel` 的原点写清楚了。** `relx/rely` 是**客户区**坐标——客户区从标题栏和菜单栏下面开始，所以点菜单必须用绝对坐标，或者截图之后用 `click { imgx, imgy }`（截图包含整窗，含标题栏）。描述里现在明写了这一点。
+
+真机（本机 Eclipse 4.x，`readtext` 窗口级返回 10,911 字符；NVIDIA 叠加层 51 字符），说明"读不到"多半不是全局现象，而是目标窗口选错了——所以第 3 条给的是"换一条通道"，不是"UIA 不行"。
+
+回归：`run-tests 143`、`profiles 42`、`targets 38`、`browser live` 全绿。
+
 ## 上传要挑对那个对话框（v0.27.1）
 
 `upload` 以前取"最像文件对话框的那个 #32770"。桌面上常驻着别的 `#32770`：wegame 的 `no_active_wnd` 就是可见、enabled、标题毫无提示的一个——路径被它吞掉，真对话框一个字符都没收到，于是"上传成功"但文件没打开。
@@ -937,9 +975,9 @@ node test\console.mjs
 node test\input.mjs
 ```
 
-最近一次全量结果：`140 passed, 0 failed`；`profiles.mjs` 42 项全过（匹配语义、`profiles` 不泄漏计划正文、`state.profile` 命中/未命中、`run` 用 `profile`+`task` 自动定位窗口并解析 `{{alias}}`、未知画像/计划/窗口的报错）；`profile-live.mjs` 7 项全过（真机：`launch cmd` → profile 的 `match` 解析出 hwnd → 重放只读计划 → `readtext` 读到 400 字符，`strategy=uia`）；`targets.mjs` 38 项全过（vmrun/ssh argv、guest 真实退出码、二进制 `get` 字节一致、stdout 只留尾部）；`e2e.mjs` 观察链路 OK；`readtext.mjs` 10 项全过（控制台读到 400 字符、`waittext` 109 ms 命中提示符、`--trim` 1440×720 → 483×720 且 PNG 678 KB → 12 KB）；`plan.mjs` 9 项全过（5 步计划一次调用 108 字节 transcript、`done 5/5 in 1.2s`、失败时带上窗口尾部文本）；`panel.mjs` 27 项全过（无 token 401、目录外文件 404、`kill` 403、前缀挂载、客户端 bundle 注册 tab 与 settings section）；`console.mjs` 七步全过；`input.mjs` 两条闭环都 `MATCH`（`SendInput` 键盘与 UIA `SetValue`/`Invoke` 各自独立验证）。
+最近一次全量结果：`143 passed, 0 failed`；`profiles.mjs` 42 项全过（匹配语义、`profiles` 不泄漏计划正文、`state.profile` 命中/未命中、`run` 用 `profile`+`task` 自动定位窗口并解析 `{{alias}}`、未知画像/计划/窗口的报错）；`profile-live.mjs` 7 项全过（真机：`launch cmd` → profile 的 `match` 解析出 hwnd → 重放只读计划 → `readtext` 读到 400 字符，`strategy=uia`）；`targets.mjs` 38 项全过（vmrun/ssh argv、guest 真实退出码、二进制 `get` 字节一致、stdout 只留尾部）；`e2e.mjs` 观察链路 OK；`readtext.mjs` 10 项全过（控制台读到 400 字符、`waittext` 109 ms 命中提示符、`--trim` 1440×720 → 483×720 且 PNG 678 KB → 12 KB）；`plan.mjs` 9 项全过（5 步计划一次调用 108 字节 transcript、`done 5/5 in 1.2s`、失败时带上窗口尾部文本）；`panel.mjs` 27 项全过（无 token 401、目录外文件 404、`kill` 403、前缀挂载、客户端 bundle 注册 tab 与 settings section）；`console.mjs` 七步全过；`input.mjs` 两条闭环都 `MATCH`（`SendInput` 键盘与 UIA `SetValue`/`Invoke` 各自独立验证）。
 
-CI（`.github/workflows/ci.yml`，windows-latest）每次 push 会自动跑「编译桥 → 断言 `bin/cu.exe` 存在 → 140 项契约单测 → 38 项跨机适配单测 → 42 项画像单测」，并把编出来的 `cu.exe` 作为 artifact 上传。它只跑不抢焦点的部分，真机注入脚本 `console.mjs` / `input.mjs` / `plan.mjs` 需要人盯着，不进 CI。
+CI（`.github/workflows/ci.yml`，windows-latest）每次 push 会自动跑「编译桥 → 断言 `bin/cu.exe` 存在 → 143 项契约单测 → 38 项跨机适配单测 → 42 项画像单测」，并把编出来的 `cu.exe` 作为 artifact 上传。它只跑不抢焦点的部分，真机注入脚本 `console.mjs` / `input.mjs` / `plan.mjs` 需要人盯着，不进 CI。
 
 `bin/cu.exe` 也可以单独用，方便排查（它自己就是命令行程序，JSON 打到 stdout）：
 

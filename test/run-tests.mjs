@@ -939,6 +939,32 @@ console.log("\n[browser by name]");
   });
 }
 
+console.log("\n[loud defaults]");
+{
+  const t = boot();
+  const slept = text(await t.execute({ action: "wait", ms: 40 }, {}));
+  await check("wait says how long it slept instead of returning nothing", () => {
+    eq(slept.ok, true);
+    eq(slept.sleptMs, 40);
+    const c = callOf("wait").at(-1);
+    eq(c.argv.slice(1), ["--ms", "40"]);
+  });
+
+  cp.state.readtextEmpty = true;
+  const blind = text(await t.execute({ action: "readtext", hwnd: "999001" }, {}));
+  cp.state.readtextEmpty = false;
+  await check("an empty readtext says where else to look", () => {
+    eq(blind.chars, 0);
+    assert.ok(/ocr/.test(String(blind.hint || "")), String(blind.hint));
+    assert.ok(/clipboard/.test(String(blind.hint || "")), String(blind.hint));
+  });
+
+  cp.state.staleHwnd = 12345;
+  await assert.rejects(() => t.execute({ action: "focus", hwnd: "12345" }, {}), /no window with hwnd 12345 - it was closed or recreated/);
+  cp.state.staleHwnd = null;
+  await check("a stale hwnd is named as stale", () => {});
+}
+
 console.log("\n[engine failure]");
 {
   const t = boot({ timeoutMs: 5000 });

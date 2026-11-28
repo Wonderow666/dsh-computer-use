@@ -15,6 +15,8 @@ export const state = {
   modals: null,
   // A test may queue one dialog list per `modals` call (see the handler).
   modalsQueue: null,
+  readtextEmpty: false,
+  staleHwnd: null,
   // Tests say what a `watch` call should see: fired (default) or a timeout.
   watch: null,
   // Tests say what `ui` exposes when the default two controls are not enough.
@@ -143,11 +145,16 @@ function payload(cmd, o) {
       };
     }
     case "readtext":
+      if (state.readtextEmpty) {
+        return { ok: true, hwnd: Number(o.hwnd), title: state.foreground.title, chars: 0, strategy: "uia", sources: [], text: "" };
+      }
       return {
         ok: true, hwnd: Number(o.hwnd), title: state.foreground.title,
         chars: 12, strategy: "uia", sources: [{ source: "uia", role: "Edit", via: "text", chars: 12 }],
         text: "hello world\n"
       };
+    case "wait":
+      return { ok: true, sleptMs: Number(o.ms || 500) };
     case "waitocr":
       return {
         ok: true, matched: true, strategy: "ocr", waitedMs: 980, tries: 2,
@@ -190,8 +197,12 @@ function payload(cmd, o) {
     }
     case "procs":
       return { ok: true, count: 2, processes: [{ pid: 4242, name: "notepad.exe" }, { pid: 32992, name: "chrome.exe" }] };
-    case "focus":
+    case "focus": {
+      if (state.staleHwnd != null && String(o.hwnd) === String(state.staleHwnd)) {
+        return { ok: false, staleHwnd: Number(o.hwnd), error: `no window with hwnd ${o.hwnd} - it was closed or recreated; list windows again (or target it by title with run {window:...})` };
+      }
       return { ok: true, window: state.windows.find((w) => String(w.hwnd) === String(o.hwnd)) || null };
+    }
     case "hit":
       return { ok: true, x: Number(o.x), y: Number(o.y), window: state.foreground };
     case "clip":
