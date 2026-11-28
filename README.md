@@ -50,7 +50,7 @@ dsh plugin --profile desktop add link:F:\path\to\dsh-computer-use
 
 重启后模型侧多出一个 `computer` 工具。插件配置在 `cordis.patch.yml`（`blockedProcesses`、`refuseFullscreenForeground`、`allowProcessControl`、`timeoutMs`、`enginePath`、`artifactsDir`），profile 自己的 `cordis.patch.yml` 可以按 id 覆盖这些字段。
 
-## 工具面（单一 `computer`，39 个 action）
+## 工具面（单一 `computer`，40 个 action）
 
 | 类别 | action | 返回 |
 | --- | --- | --- |
@@ -588,6 +588,43 @@ clicked 4:MenuItem:系统 via invoke
 
 `how` 是结果不是承诺：能 `invoke` 就走控件本身（被滚出视野也有效），不能才退回到矩形中心点一下。编号挤在一起时（标题栏三个按钮只隔 10px），徽标会按碰撞避让挪位；如果图上看不清，`find --name` 仍然是最精确的那把尺。
 
+## 坐标只报一种（v0.23.0）
+
+坐标这件事原来有三种：截图像素、屏幕像素、客户区像素。截图是 1600 宽的图，屏幕是 2560 宽，`relx/rely` 又是**相对窗口客户区**的——三个数看起来都像坐标，差了 1.6 倍。模型不该做这种乘法。
+
+现在一张截图自带它的换算表，点击直接用**图上的像素**：
+
+| 想做什么 | 怎么写 | 回来什么 |
+| --- | --- | --- |
+| 截一张图 | `computer action=screenshot hwnd=721562` | `{path, w, h, srcW, scale, x, y}`，并存进 `artifacts/shots.json` |
+| 点图上 (120, 64) | `computer action=click imgx=120 imgy=64` | `{ok, x, y, from:{image, imgx, imgy, scale}}`——返回的 `x/y` 就是真实落点 |
+
+`see` 的编号图同样登记在册，所以 `clicknum` 和 `click imgx/imgy` 可以混着用。换算只有一次：`屏幕 = 图原点 + 图像素 × scale`，由插件算，不由模型算。截图只留最近 20 张的账，找不到账就直说"先截一张"，不猜。
+
+### 给文件选择框一条路：`upload`
+
+浏览器的"选择文件"框是个标准 Win32 对话框（`#32770`），键盘能走完：聚焦 → 清空文件名框 → 输入路径 → 回车。`upload` 把这四步合成一次调用，并且**确认框关没关**：
+
+```
+computer action=upload path="D:\\data\\report.csv"
+→ {"ok":true,"dialog":"打开","file":"D:\\data\\report.csv","closed":true}
+```
+
+没有对话框、路径不存在都会被明确拒绝（前者列出当前所有对话框的标题），绝不盲敲。这一步补的是"上传"这个以前只能靠人点的动作。
+
+### 重试是一行前缀
+
+`retry N` 和 `until` 并列，管的是"这一招可能不灵"：
+
+```
+retry 3 press Save
+until /已保存|Saved/ 8000 key ctrl+s
+```
+
+`retry` 最多试 N 次（上限 20），成功即停；全失败才进入失败复盘（留下截图、控件树与 transcript）。`until` 管的是"等到屏幕说对了"，两者可以叠。
+
+最后一条：控件 `invoke` 失败现在会**带着原因**回退到真实点击（`{"how":"click","invokeFailed":"ElementNotAvailableException…"}`）。虚拟列表回收元素时矩形仍然是对的——失败是事实，不该被吞掉。
+
 ## 可视化面板：人给模型指路
 
 模型不需要"看着屏幕操作"，但**人需要看着屏幕给模型指路**。面板做四件事：按需截图 → 点一下查这个点是什么控件 → 列出可操作控件 → 记动作日志。
@@ -726,7 +763,7 @@ node test\console.mjs
 node test\input.mjs
 ```
 
-最近一次全量结果：`123 passed, 0 failed`；`profiles.mjs` 42 项全过（匹配语义、`profiles` 不泄漏计划正文、`state.profile` 命中/未命中、`run` 用 `profile`+`task` 自动定位窗口并解析 `{{alias}}`、未知画像/计划/窗口的报错）；`profile-live.mjs` 7 项全过（真机：`launch cmd` → profile 的 `match` 解析出 hwnd → 重放只读计划 → `readtext` 读到 400 字符，`strategy=uia`）；`targets.mjs` 38 项全过（vmrun/ssh argv、guest 真实退出码、二进制 `get` 字节一致、stdout 只留尾部）；`e2e.mjs` 观察链路 OK；`readtext.mjs` 10 项全过（控制台读到 400 字符、`waittext` 109 ms 命中提示符、`--trim` 1440×720 → 483×720 且 PNG 678 KB → 12 KB）；`plan.mjs` 9 项全过（5 步计划一次调用 108 字节 transcript、`done 5/5 in 1.2s`、失败时带上窗口尾部文本）；`panel.mjs` 27 项全过（无 token 401、目录外文件 404、`kill` 403、前缀挂载、客户端 bundle 注册 tab 与 settings section）；`console.mjs` 七步全过；`input.mjs` 两条闭环都 `MATCH`（`SendInput` 键盘与 UIA `SetValue`/`Invoke` 各自独立验证）。
+最近一次全量结果：`131 passed, 0 failed`；`profiles.mjs` 42 项全过（匹配语义、`profiles` 不泄漏计划正文、`state.profile` 命中/未命中、`run` 用 `profile`+`task` 自动定位窗口并解析 `{{alias}}`、未知画像/计划/窗口的报错）；`profile-live.mjs` 7 项全过（真机：`launch cmd` → profile 的 `match` 解析出 hwnd → 重放只读计划 → `readtext` 读到 400 字符，`strategy=uia`）；`targets.mjs` 38 项全过（vmrun/ssh argv、guest 真实退出码、二进制 `get` 字节一致、stdout 只留尾部）；`e2e.mjs` 观察链路 OK；`readtext.mjs` 10 项全过（控制台读到 400 字符、`waittext` 109 ms 命中提示符、`--trim` 1440×720 → 483×720 且 PNG 678 KB → 12 KB）；`plan.mjs` 9 项全过（5 步计划一次调用 108 字节 transcript、`done 5/5 in 1.2s`、失败时带上窗口尾部文本）；`panel.mjs` 27 项全过（无 token 401、目录外文件 404、`kill` 403、前缀挂载、客户端 bundle 注册 tab 与 settings section）；`console.mjs` 七步全过；`input.mjs` 两条闭环都 `MATCH`（`SendInput` 键盘与 UIA `SetValue`/`Invoke` 各自独立验证）。
 
 CI（`.github/workflows/ci.yml`，windows-latest）每次 push 会自动跑「编译桥 → 断言 `bin/cu.exe` 存在 → 123 项契约单测 → 38 项跨机适配单测 → 42 项画像单测」，并把编出来的 `cu.exe` 作为 artifact 上传。它只跑不抢焦点的部分，真机注入脚本 `console.mjs` / `input.mjs` / `plan.mjs` 需要人盯着，不进 CI。
 

@@ -105,7 +105,7 @@ console.log("\n[observe]");
   const t2 = boot();
   const w2 = text(await t2.execute({ action: "screenshot" }, {}));
   await check("screenshot defaults to maxw 1600", () => eq(callOf("shot")[0].argv[callOf("shot")[0].argv.indexOf("--maxw") + 1], "1600"));
-  await check("screenshot hint mentions scale", () => assert.match(w2.hint, /scale/));
+  await check("screenshot hint offers picture pixels instead of arithmetic", () => assert.match(w2.hint, /imgx/));
 
   const tree = text(await t.execute({ action: "snapshot", hwnd: "656368", depth: 3 }, {}));
   await check("snapshot targets hwnd with depth", () => {
@@ -813,6 +813,71 @@ console.log("\n[failure forensics]");
     assert.ok(/no named controls/.test(blank.hint), blank.hint);
   });
   cp.state.ui = null;
+}
+
+console.log("\n[coordinates, retries, uploads]");
+{
+  const t = boot();
+  const shotsFile = path.join(ARTIFACTS, "shots.json");
+  try { fs.rmSync(shotsFile, { force: true }); } catch { /* first run */ }
+
+  const shot = text(await t.execute({ action: "screenshot", hwnd: "999001" }, {}));
+  await check("a screenshot records how it was taken", () => {
+    eq(shot.scale, 1.6);
+    const all = JSON.parse(fs.readFileSync(shotsFile, "utf8"));
+    eq(all[0].image, shot.path);
+    eq(all[0].scale, 1.6);
+    eq(all[0].hwnd, "999001");
+  });
+
+  const pic = text(await t.execute({ action: "click", imgx: 100, imgy: 50 }, {}));
+  await check("click takes picture pixels and converts them once", () => {
+    eq([pic.x, pic.y], [160, 80]);
+    const c = callOf("click").at(-1);
+    eq(c.argv[c.argv.indexOf("--x") + 1], "160");
+    eq(c.argv[c.argv.indexOf("--y") + 1], "80");
+  });
+
+  const bare = boot({ artifactsDir: path.join(ARTIFACTS, "no-shots") });
+  await assert.rejects(() => bare.execute({ action: "click", imgx: 1, imgy: 1 }, {}), /no picture on record/);
+  await check("a click in a picture that does not exist says what to do", () => {});
+
+  const retried = trans(await t.execute({ action: "run", hwnd: "999001", plan: "retry 3 wait /never-there/ 20" }, {}));
+  await check("retry N gives a step N tries before giving up", () => {
+    assert.ok(/FAILED/.test(retried), retried);
+    eq(callOf("waittext").filter((c) => c.argv.join(" ").includes("never-there")).length, 3);
+  });
+  await assert.rejects(() => t.execute({ action: "run", hwnd: "999001", plan: "retry 3" }, {}), /prefix has no step/);
+  await check("retry without a step is named as a mistake", () => {});
+
+  const u = boot();
+  const file = path.join(ARTIFACTS, "upload-me.txt");
+  fs.mkdirSync(ARTIFACTS, { recursive: true });
+  fs.writeFileSync(file, "hello\n", "utf8");
+  cp.state.modals = null;
+  cp.state.modalsQueue = [
+    [{ hwnd: 8801, title: "打开", class: "#32770", pid: 300, process: "chrome.exe", dialogClass: true, visible: true }],
+    []
+  ];
+  const up = text(await u.execute({ action: "upload", path: file }, {}));
+  await check("upload types the path into the dialog that is already open", () => {
+    eq(up.closed, true);
+    eq(up.dialog, "打开");
+    const typed = callOf("type").at(-1);
+    assert.ok(typed.argv.includes(file), typed.argv.join(" "));
+    eq(typed.argv[typed.argv.indexOf("--hwnd") + 1], "8801");
+    const keys = callOf("key").map((c) => c.argv[c.argv.indexOf("--combo") + 1]);
+    // Clear the stale name first, then commit - and never trust the box to be empty.
+    eq(keys.slice(-2), ["ctrl+a", "return"]);
+  });
+
+  cp.state.modalsQueue = null;
+  cp.state.modals = [];
+  await assert.rejects(() => u.execute({ action: "upload", path: file }, {}), /no file dialog is open/);
+  await check("upload says so when no dialog is open", () => {});
+  cp.state.modals = null;
+  await assert.rejects(() => u.execute({ action: "upload", path: path.join(ARTIFACTS, "nope.txt") }, {}), /no such file/);
+  await check("upload refuses a path that is not there", () => {});
 }
 
 console.log("\n[engine failure]");

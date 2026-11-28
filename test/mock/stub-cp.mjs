@@ -13,6 +13,8 @@ export const state = {
     { hwnd: 999001, title: "Untitled - Notepad", class: "Notepad", process: "notepad.exe", pid: 4242, visible: true, foreground: false, rect: { x: 40, y: 40, w: 900, h: 700 } }
   ],
   modals: null,
+  // A test may queue one dialog list per `modals` call (see the handler).
+  modalsQueue: null,
   // Tests say what a `watch` call should see: fired (default) or a timeout.
   watch: null,
   // Tests say what `ui` exposes when the default two controls are not enough.
@@ -91,6 +93,9 @@ function payload(cmd, o) {
       };
     }
     case "modals":
+      // A test may queue the sequence of dialog lists it wants to see: the first
+      // call shows the dialog, the calls after the Enter show it is gone.
+      if (Array.isArray(state.modalsQueue) && state.modalsQueue.length) state.modals = state.modalsQueue.shift();
       // One real dialog plus one overlay widget: only the dialog counts.
       return {
         ok: true,

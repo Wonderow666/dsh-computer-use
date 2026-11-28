@@ -221,6 +221,17 @@ Window 客户机别忘写 `shell: windows`：这样 `exec` 会走 `cmd.exe /c` +
 
 判据：**一次 dry-run 的代价是一次 `windows` 调用**，一次真跑的代价是几分钟、几次截图、以及一个可能已经点错的面板。
 
+### 2.23 坐标只报一种
+
+看到什么问题：截图 1600 宽、屏幕 2560 宽、`relx/rely` 又是客户区坐标，三个数都像坐标，差 1.6 倍，点偏了才发现。
+
+怎么做：
+
+1. 先 `screenshot`（或 `see`），图里带着 `scale` 与原点，同时记进 `artifacts/shots.json`；
+2. 点击用图上的像素：`click imgx=… imgy=…`，不要自己乘；
+3. 要点的东西有名字就更好：`click name="保存"` > `clicknum 3` > `click imgx/imgy` > `click relx/rely`；
+4. 需要往文件选择框里放文件时用 `upload path=…`，它会确认框真的关了，而不是假定回车有效。
+
 ### 2.22 编号截图：把定位变成"第 3 个"
 
 没有控件树的地方（画布、自绘面板、一部分 Electron）别让模型算坐标：`see` 出一张带编号的图和一张编号表，`clicknum N` 直接点。编号只给能点的控件，默认最多 12 个；`how` 说清是走了 invoke 还是点了中心。图上看不清就退回 `find --name`——编号是为了省 token，不是为了精确到像素。

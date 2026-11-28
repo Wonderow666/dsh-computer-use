@@ -1,6 +1,6 @@
 {
   "name": "dsh-computer-use",
-  "version": "0.22.0",
+  "version": "0.23.0",
   "description": "Native Windows GUI control for DeepSeek Harness: screen capture, UI Automation tree, mouse and keyboard injection, app launch and kill, all behind one `computer` tool.",
   "keywords": [
     "dsh",
@@ -52,7 +52,8 @@
     "test:watch": "node test/watch-live.mjs",
     "mcp": "node mcp/server.mjs",
     "test:mcp": "node test/mcp.mjs",
-    "test:see": "node test/see-live.mjs"
+    "test:see": "node test/see-live.mjs",
+    "test:upload": "node test/upload-live.mjs"
   },
   "engines": {
     "node": ">=20"
